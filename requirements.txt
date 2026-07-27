@@ -1,0 +1,21 @@
+# ── Core pipeline (required) ────────────────────────────────────────────────
+streamlit>=1.32
+numpy>=1.24
+pandas>=2.0
+scikit-learn>=1.3        # TF-IDF, cosine similarity, stopword fallback
+nltk>=3.8                # tokenizer + lemmatizer (stage 02, degrades gracefully)
+requests>=2.31           # LLM provider HTTP calls
+rank-bm25>=0.2.2         # BM25 (stage 05 has a NumPy fallback if absent)
+
+# ── Semantic retrieval (stage 04/05) ────────────────────────────────────────
+# Pulls in torch (~200 MB). Comment BOTH lines out for a lightweight BM25-only
+# deploy — the app detects their absence and runs lexical-only.
+sentence-transformers>=2.6
+faiss-cpu>=1.7           # vector store; falls back to a NumPy matmul if missing
+
+# ── Document upload parsers (stage 01) ──────────────────────────────────────
+pypdf>=4.0               # .pdf
+python-docx>=1.1         # .docx
+
+# ── Local secrets (.env) ────────────────────────────────────────────────────
+python-dotenv>=1.0       # optional; llm_providers has a minimal built-in parser

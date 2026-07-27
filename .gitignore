@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# ── SECRETS — never commit these ────────────────────────────────────────────
+.env
+.env.local
+.streamlit/secrets.toml
+
+# Caches / generated artifacts (all rebuilt automatically from source data)
+data/doc_embeddings.npy
+data/doc_embeddings.meta.json
+data/faiss.index
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.claude/

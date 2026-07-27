@@ -1,0 +1,51 @@
+{
+  "_comment": "Ground-truth eval for PhARMA RAG. 'answerable' = drug is in the corpus and the question should be answered (expect a source from `drug`). 'refuse' = the query names a drug NOT in the corpus (or no drug), and the system MUST refuse rather than answer from unrelated sources. Drug tokens below were verified present in data/drugs_large.json.",
+  "answerable": [
+    {"q": "how does metformin work?", "drug": "metformin", "field": "mechanism"},
+    {"q": "what is metformin used for?", "drug": "metformin", "field": "indications"},
+    {"q": "what are the side effects of naproxen?", "drug": "naproxen", "field": "side_effects"},
+    {"q": "what interacts with warfarin?", "drug": "warfarin", "field": "interactions"},
+    {"q": "warfarin contraindications", "drug": "warfarin", "field": "contraindications"},
+    {"q": "how does atorvastatin lower cholesterol?", "drug": "atorvastatin", "field": "mechanism"},
+    {"q": "what is lisinopril prescribed for?", "drug": "lisinopril", "field": "indications"},
+    {"q": "amoxicillin dosage", "drug": "amoxicillin", "field": "dosage"},
+    {"q": "side effects of prednisone", "drug": "prednisone", "field": "side_effects"},
+    {"q": "lamotrigine drug interactions", "drug": "lamotrigine", "field": "interactions"},
+    {"q": "what is sertraline used to treat?", "drug": "sertraline", "field": "indications"},
+    {"q": "how does omeprazole work?", "drug": "omeprazole", "field": "mechanism"},
+    {"q": "gabapentin side effects", "drug": "gabapentin", "field": "side_effects"},
+    {"q": "what does glimepiride do?", "drug": "glimepiride", "field": "mechanism"},
+    {"q": "varenicline indications", "drug": "varenicline", "field": "indications"},
+    {"q": "tamsulosin uses", "drug": "tamsulosin", "field": "indications"},
+    {"q": "famotidine mechanism of action", "drug": "famotidine", "field": "mechanism"},
+    {"q": "olanzapine side effects", "drug": "olanzapine", "field": "side_effects"},
+    {"q": "ondansetron dosage", "drug": "ondansetron", "field": "dosage"},
+    {"q": "what is ropinirole used for?", "drug": "ropinirole", "field": "indications"},
+    {"q": "does warfarin interact with naproxen?", "drug": "warfarin", "field": "interactions"},
+    {"q": "trametinib contraindications", "drug": "trametinib", "field": "contraindications"}
+  ],
+  "refuse": [
+    {"q": "what are the side effects of aspirin?", "why": "aspirin not in corpus"},
+    {"q": "how does ibuprofen work?", "why": "ibuprofen not in corpus"},
+    {"q": "is tylenol safe?", "why": "brand name, not in corpus"},
+    {"q": "paracetamol dosage", "why": "not in corpus"},
+    {"q": "what does viagra do?", "why": "not in corpus"},
+    {"q": "xanax side effects", "why": "not in corpus"},
+    {"q": "adderall interactions", "why": "not in corpus"},
+    {"q": "loratadine side effects", "why": "not in corpus"},
+    {"q": "what is the weather today?", "why": "no drug named"},
+    {"q": "tell me a joke", "why": "no drug named"}
+  ],
+  "_interactions_comment": "DDInter lookups. 'level' => expect status 'ok' at that severity. 'status' => expect exactly that non-ok status. Verified against data/ddinter/.",
+  "interactions": [
+    {"a": "warfarin", "b": "naproxen", "level": "Major"},
+    {"a": "simvastatin", "b": "clarithromycin", "level": "Major"},
+    {"a": "aspirin", "b": "warfarin", "level": "Major", "note": "synonym: aspirin->acetylsalicylic acid"},
+    {"a": "advil", "b": "aspirin", "level": "Major", "note": "both brand/lay names"},
+    {"a": "amoxicillin", "b": "warfarin", "level": "Moderate"},
+    {"a": "ibuprofen", "b": "naproxen", "level": "Moderate"},
+    {"a": "tylenol", "b": "warfarin", "level": "Moderate", "note": "synonym: tylenol->acetaminophen"},
+    {"a": "sertraline", "b": "tramadol", "status": "no_interaction"},
+    {"a": "flibberish", "b": "warfarin", "status": "unknown_drug", "note": "nonsense drug -> no guess"}
+  ]
+}
