@@ -268,7 +268,7 @@ class Answer:
     """Everything the UI, the evaluator and the debugger need about one answer."""
     text: str
     chunks: list                       # the retrieved sources, in citation order
-    mode: str                          # "llm" | "extractive" | "refused"
+    mode: str                          # "llm" | "extractive" | "llm_failed" | "refused"
     status: str                        # the retrieval status behind it
     provider: str = ""
     model: str = ""
@@ -276,10 +276,25 @@ class Answer:
     context: str = ""                  # the exact context packed into it
     attempts: list = dc_field(default_factory=list)
     verification: Optional[Verification] = None
+    llm_error: str = ""                # populated ONLY when mode == "llm_failed"
 
     @property
     def refused(self) -> bool:
         return self.mode == "refused"
+
+    @property
+    def llm_failed(self) -> bool:
+        """A provider WAS configured and every attempt failed.
+
+        # WHY is this distinct from "extractive"?
+        # "extractive" is a designed, documented mode: no credentials are present,
+        # so the app answers from retrieved text instead. That is expected and fine.
+        # "llm_failed" means the operator configured a provider and it did not
+        # work — a bad key, a retired model slug, a rate limit. Collapsing the two
+        # would hide a real outage behind a degraded-but-plausible answer, so this
+        # mode exists to force the UI to surface the provider's own error.
+        """
+        return self.mode == "llm_failed"
 
 
 def answer_question(query: str, retriever, k: int = 5, use_llm: bool = True,
@@ -298,25 +313,44 @@ def answer_question(query: str, retriever, k: int = 5, use_llm: bool = True,
     context = pack_context(outcome.chunks)
     prompt = build_prompt(query, context)
 
-    # 6c — GENERATE, with the provider cascade. Any total failure falls through
-    #      to extractive rather than surfacing an error.
-    if use_llm:
-        response = llm_providers.generate(prompt, prefer=prefer, temperature=temperature)
-        if response.ok:
-            text = ensure_disclaimer(extract_answer(response.text))
-            return Answer(text=text, chunks=outcome.chunks, mode="llm",
-                          status=outcome.status, provider=response.provider,
-                          model=response.model, prompt=prompt, context=context,
-                          attempts=response.attempts,
-                          verification=verify_answer(text, outcome.chunks))
-        attempts = response.attempts
-    else:
-        attempts = [("(llm disabled)", "skipped")]
+    # 6c — GENERATE via the provider cascade.
+    if not use_llm:
+        text = extractive_answer(outcome.chunks)
+        return Answer(text=text, chunks=outcome.chunks, mode="extractive",
+                      status=outcome.status, prompt=prompt, context=context,
+                      attempts=[("(llm disabled)", "skipped")],
+                      verification=verify_answer(text, outcome.chunks))
 
+    response = llm_providers.generate(prompt, prefer=prefer, temperature=temperature)
+    if response.ok:
+        text = ensure_disclaimer(extract_answer(response.text))
+        return Answer(text=text, chunks=outcome.chunks, mode="llm",
+                      status=outcome.status, provider=response.provider,
+                      model=response.model, prompt=prompt, context=context,
+                      attempts=response.attempts,
+                      verification=verify_answer(text, outcome.chunks))
+
+    # Generation did not produce text. Split the two very different reasons apart
+    # instead of quietly degrading both to the same "extractive" answer.
+    configured = llm_providers.available_providers()
     text = extractive_answer(outcome.chunks)
+
+    if configured:
+        # A provider is configured and still failed → this is an incident, not a
+        # mode. Keep the sourced text so the user is not left empty-handed, but
+        # mark it so the UI raises the provider's own error message.
+        errors = "; ".join(f"{name}: {outcome_}" for name, outcome_ in response.attempts
+                           if outcome_ not in ("not configured",))
+        return Answer(text=text, chunks=outcome.chunks, mode="llm_failed",
+                      status=outcome.status, prompt=prompt, context=context,
+                      attempts=response.attempts, llm_error=errors,
+                      verification=verify_answer(text, outcome.chunks))
+
+    # No credentials anywhere → extractive is the designed, documented behaviour.
     return Answer(text=text, chunks=outcome.chunks, mode="extractive",
                   status=outcome.status, prompt=prompt, context=context,
-                  attempts=attempts, verification=verify_answer(text, outcome.chunks))
+                  attempts=response.attempts,
+                  verification=verify_answer(text, outcome.chunks))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

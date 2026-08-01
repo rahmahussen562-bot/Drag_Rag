@@ -309,21 +309,52 @@ question itself).
 
 ## LLM providers & fallback
 
-Priority cascade — each falls through on a missing key **or** a failure:
+**OpenRouter is the primary provider.** Only `OPENROUTER_API_KEY` is required.
 
 | # | Provider | Default model | Get a key |
 |---|---|---|---|
-| 1 | **OpenRouter** | `meta-llama/llama-3.3-70b-instruct:free` | [openrouter.ai/keys](https://openrouter.ai/keys) |
+| 1 | **OpenRouter** | free-model chain (below) | [openrouter.ai/keys](https://openrouter.ai/keys) |
 | 2 | **Gemini** | `gemini-2.0-flash` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | 3 | **Groq** | `llama-3.3-70b-versatile` | [console.groq.com/keys](https://console.groq.com/keys) |
 | 4 | **Ollama** (local) | `llama3.2:latest` | no key — `ollama pull llama3.2` |
-| 5 | **Extractive** | — | no LLM: returns retrieved text verbatim, still cited |
+| 5 | **Extractive** | — | no LLM configured: returns retrieved text verbatim, still cited |
 
-Free tiers rate-limit and free model slugs get retired, so cascading means a 429 from OpenRouter
-becomes a Gemini answer instead of an error page. **Step 5 matters most:** with zero credentials the
-app still answers — less fluent, but *more* grounded (it's quotation, not generation) and still
-cited and disclaimed. Every model slug is overridable by secret, so a dead model is a config change,
-not a code change.
+### The OpenRouter model chain
+
+Free model slugs get **retired without notice** — this is not hypothetical, it is exactly what broke
+this app. The previous hard-coded default returned:
+
+```
+HTTP 404 {"error":{"message":"This model is unavailable for free …"}}
+```
+
+A single pinned slug therefore has a shelf life, and when it expires the provider looks broken even
+though the key is perfectly valid. So `llm_providers.OPENROUTER_MODEL_CHAIN` holds an ordered list
+and a model-level failure (404 / 429 / "no endpoints") advances to the next entry **while staying on
+OpenRouter**. An auth failure (401/403) does *not* advance — retrying a bad key against five models
+is five pointless round trips.
+
+Order was measured, not guessed: each candidate was given the real RAG prompt and scored on whether
+it emitted `[Source N]` citations, kept the disclaimer, and grounded its answer in the context.
+
+| Model | Citations | Context overlap | Latency |
+|---|---|---|---|
+| `nvidia/nemotron-3-nano-30b-a3b:free` | 2 | 68% | 4.0 s |
+| `openai/gpt-oss-20b:free` | 2 | 66% | 7.7 s |
+| `inclusionai/ling-3.0-flash:free` | 1 | 84% | 1.4 s |
+| `google/gemma-4-26b-a4b-it:free` | 1 | 70% | 12.7 s |
+| `openrouter/free` | 1 | 61% | 2.0 s |
+
+Setting `OPENROUTER_MODEL` in secrets pins one model and bypasses the chain entirely.
+
+### Failures are never silent
+
+A configured provider that fails is an **incident, not a mode**. The app distinguishes:
+
+- `extractive` — no credentials anywhere. The designed, documented fallback; quiet by intent.
+- `llm_failed` — a provider *was* configured and every attempt failed. The UI raises a red banner
+  with the provider's own error text above the answer, so a bad key or retired slug can never hide
+  behind a plausible-looking sourced answer.
 
 ---
 
@@ -333,16 +364,18 @@ not a code change.
 # 1. Install
 pip install -r requirements.txt
 
-# 2. (Optional) add an LLM key — the app works without one
-cp .env.example .env        # Windows: copy .env.example .env
-#   then paste ONE of OPENROUTER_API_KEY / GEMINI_API_KEY / GROQ_API_KEY
+# 2. Add your OpenRouter key (the app runs without one, but answers extractively)
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+#   then paste OPENROUTER_API_KEY
+#   (a .env file with the same variable also works)
 
 # 3. Launch
 streamlit run streamlit_app.py
 ```
 
-First launch encodes 14,955 chunks (~3 min on CPU) and caches them to
-`data/doc_embeddings.npy`; later launches load in ~50 ms.
+Boot is **~23 s**: `data/doc_embeddings.npy` ships with the repo, so the corpus is never re-encoded
+on a normal clone. Stage 04 validates it against a SHA-256 content fingerprint and silently
+re-encodes only if the corpus or the model actually changed.
 
 **Run any stage on its own:**
 
@@ -366,16 +399,31 @@ The app detects their absence and runs BM25-only — instant startup, lower fiel
 
 1. Push the repo to GitHub.
 2. [share.streamlit.io](https://share.streamlit.io) → **New app** → pick the repo →
-   main file **`streamlit_app.py`**.
-3. **Settings → Secrets** → paste (see next section).
+   main file **`streamlit_app.py`** → *Advanced settings* → Python **3.11**.
+3. **Settings → Secrets** → paste `OPENROUTER_API_KEY` (see next section).
 4. Deploy.
 
-Notes:
-- `data/doc_embeddings.npy` is git-ignored, so the first cloud boot re-encodes the corpus (~3 min)
-  and caches it for the container's lifetime.
-- Streamlit Cloud gives **1 GB RAM**. torch + transformers + the 23 MB embedding matrix fit, but
-  enabling the cross-encoder reranker *and* semantic retrieval simultaneously is tight — the
-  reranker toggle defaults to **off**.
+`streamlit_app.py` is the **only** entry point. (An `app.py` shim existed for backwards
+compatibility and was removed — two entry points for one app is a deployment foot-gun.)
+
+### Measured boot cost
+
+These numbers decide whether the deploy succeeds, so they were measured rather than assumed:
+
+| | Cold boot | Peak RSS |
+|---|---|---|
+| Embedding cache **absent** (what a `.gitignore`'d cache gives you) | **308 s** | **1,176 MB** ❌ |
+| Embedding cache **committed** (current behaviour) | **23 s** | **868 MB** ✅ |
+
+That is why `data/doc_embeddings.npy` is committed rather than ignored: without it the container
+both blows the boot timeout and exceeds the memory limit. Breakdown of the 868 MB: torch +245 MB,
+chunking +185 MB (transient tokenizer allocation), BM25 index +138 MB, embedding matrix +23 MB,
+DDInter +61 MB.
+
+Headroom notes:
+- The cross-encoder reranker loads a **second** transformer. Leave the toggle **off** on Cloud
+  unless you have confirmed the extra headroom.
+- `faiss.index` is *not* committed — it rebuilds from the committed vectors in ~0.05 s.
 
 ---
 
@@ -391,20 +439,32 @@ Notes:
 
 ```toml
 OPENROUTER_API_KEY = "sk-or-v1-..."
-# optional overrides:
-# OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
-# GEMINI_API_KEY   = "AIza..."
-# GROQ_API_KEY     = "gsk_..."
+# optional — pin one model instead of using the auto-advancing chain:
+# OPENROUTER_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
+# optional extra providers, only used if OpenRouter is unreachable:
+# GROQ_API_KEY   = "gsk_..."
+# GEMINI_API_KEY = "AIza..."
 ```
 
-**Locally** — `.env` (copy from `.env.example`):
+**Locally** — either `.streamlit/secrets.toml` (copy from
+`.streamlit/secrets.toml.example`) or `.env` (copy from `.env.example`):
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
-`.gitignore` already excludes `.env` and `.streamlit/secrets.toml`. `eval/run_e2e.py` **Test 7**
-scans the tracked source for key-shaped literals and fails the build if it finds any.
+`.gitignore` excludes `.env` and `.streamlit/secrets.toml`; only the `.example` templates are
+tracked. `eval/run_e2e.py` **Test 7** scans the tracked source for key-shaped literals and fails
+the build if it finds any.
+
+**Verifying your key works:**
+
+```bash
+python llm_providers.py "Reply with exactly the word: PONG"
+```
+
+This prints the provider status table and the full attempt log, so a bad key, a retired model, or a
+rate limit is visible immediately rather than being inferred from a degraded answer.
 
 ---
 

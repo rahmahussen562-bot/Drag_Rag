@@ -104,8 +104,36 @@ def get_secret(name: str, default: str = "") -> str:
 # site? Free slugs get retired without notice. Every one is overridable by secret
 # (e.g. OPENROUTER_MODEL) so a dead model is a config change, not a code change.
 # ─────────────────────────────────────────────────────────────────────────────
+# OpenRouter free-tier model chain, in measured preference order.
+#
+# # WHY A CHAIN AND NOT ONE SLUG?
+# This is the failure that actually broke the app. The previous default,
+# "meta-llama/llama-3.3-70b-instruct:free", was retired from the free tier and
+# OpenRouter began returning:
+#     HTTP 404 {"error":{"message":"This model is unavailable for free …"}}
+# A single hard-coded slug therefore has a shelf life, and when it expires the
+# provider looks broken even though the key is perfectly valid.
+#
+# Ordering was measured, not guessed (see the model benchmark in the commit that
+# introduced this): each candidate was given the real RAG prompt and scored on
+# whether it emitted [Source N] citations, kept the disclaimer, and grounded its
+# answer in the supplied context.
+#     nemotron-3-nano-30b   2 citations, 68% context overlap, 4.0s
+#     gpt-oss-20b           2 citations, 66% overlap, 7.7s
+#     ling-3.0-flash        1 citation,  84% overlap, 1.4s
+#     gemma-4-26b           1 citation,  70% overlap, 12.7s
+#     openrouter/free       1 citation,  61% overlap, 2.0s   (meta-slug, routes)
+# Setting OPENROUTER_MODEL in secrets overrides the chain entirely.
+OPENROUTER_MODEL_CHAIN = [
+    "nvidia/nemotron-3-nano-30b-a3b:free",
+    "openai/gpt-oss-20b:free",
+    "inclusionai/ling-3.0-flash:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "openrouter/free",
+]
+
 DEFAULT_MODELS = {
-    "openrouter": "meta-llama/llama-3.3-70b-instruct:free",
+    "openrouter": OPENROUTER_MODEL_CHAIN[0],
     "gemini": "gemini-2.0-flash",
     "groq": "llama-3.3-70b-versatile",
     "ollama": "llama3.2:latest",
@@ -157,23 +185,105 @@ def _post_json(url: str, payload: dict, headers: dict, timeout: int) -> dict:
     return response.json()
 
 
+def _extract_chat_text(data: dict, provider: str) -> str:
+    """Pull the assistant text out of an OpenAI-shaped response, or raise.
+
+    # WHY not just data["choices"][0]["message"]["content"]?
+    # Because that line raises KeyError/IndexError/TypeError on three shapes that
+    # OpenRouter genuinely returns in production, and a bare KeyError tells the
+    # operator nothing about how to fix it:
+    #   • {"error": {...}} with HTTP 200      — upstream provider failed mid-request
+    #   • {"choices": []}                     — request accepted, nothing generated
+    #   • content: null                       — hit the length cap or a safety stop
+    # Each is turned into a ProviderError carrying the real reason, so the model
+    # chain below can react and the UI can show something actionable.
+    """
+    if isinstance(data.get("error"), dict):
+        err = data["error"]
+        raise ProviderError(f"{provider} error {err.get('code', '')}: "
+                            f"{err.get('message', 'unknown')}".strip())
+
+    choices = data.get("choices") or []
+    if not choices:
+        raise ProviderError(f"{provider} returned no choices")
+
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    if content is None or not str(content).strip():
+        reason = choices[0].get("finish_reason", "unknown")
+        raise ProviderError(f"{provider} returned empty content (finish_reason={reason})")
+    return str(content)
+
+
+# Errors that mean "this MODEL is unusable right now" rather than "this PROVIDER
+# is unusable". Only these justify advancing the chain; an auth failure must not,
+# because retrying a bad key against five models is five pointless round trips.
+_MODEL_LEVEL_SIGNS = (
+    "404", "429", "400",
+    "unavailable for free", "not a valid model", "no endpoints found",
+    "rate limit", "temporarily rate-limited", "no instances available",
+)
+
+
+def _is_model_level_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    if "401" in text or "403" in text or "no auth credentials" in text:
+        return False                      # bad/absent key — the chain cannot help
+    return any(sign in text for sign in _MODEL_LEVEL_SIGNS)
+
+
+def openrouter_models() -> list[str]:
+    """Models to try, in order. An explicit OPENROUTER_MODEL secret wins outright."""
+    configured = get_secret("OPENROUTER_MODEL")
+    return [configured] if configured else list(OPENROUTER_MODEL_CHAIN)
+
+
 def call_openrouter(prompt: str, model: str = "", temperature: float = DEFAULT_TEMPERATURE,
                     timeout: int = DEFAULT_TIMEOUT) -> str:
+    """Call OpenRouter, walking the model chain past retired/rate-limited slugs.
+
+    Staying inside OpenRouter for model-level failures is deliberate: OpenRouter
+    is the designated primary provider, so a dead free slug must not be allowed
+    to demote the whole request to a different provider.
+    """
     key = get_secret("OPENROUTER_API_KEY")
     if not key:
         raise ProviderError("OPENROUTER_API_KEY not set")
-    model = model or get_secret("OPENROUTER_MODEL", DEFAULT_MODELS["openrouter"])
+
     host = get_secret("OPENROUTER_HOST", "https://openrouter.ai/api/v1")
-    data = _post_json(
-        f"{host}/chat/completions",
-        {"model": model, "messages": [{"role": "user", "content": prompt}],
-         "temperature": temperature},
-        {"Authorization": f"Bearer {key}",
-         # Optional attribution headers OpenRouter uses for its free-tier ranking.
-         "HTTP-Referer": "https://github.com/pharma-rag",
-         "X-Title": "PhARMA RAG"},
-        timeout)
-    return data["choices"][0]["message"]["content"]
+    headers = {
+        "Authorization": f"Bearer {key}",
+        # Optional attribution headers OpenRouter uses for its free-tier ranking.
+        "HTTP-Referer": "https://github.com/Drag_Rag",
+        "X-Title": "Drag_Rag",
+    }
+
+    candidates = [model] if model else openrouter_models()
+    last_error: Optional[Exception] = None
+
+    for candidate in candidates:
+        try:
+            data = _post_json(
+                f"{host}/chat/completions",
+                {"model": candidate,
+                 "messages": [{"role": "user", "content": prompt}],
+                 "temperature": temperature},
+                headers, timeout)
+            text = _extract_chat_text(data, "openrouter")
+            _LAST_OPENROUTER_MODEL["value"] = candidate   # for accurate UI reporting
+            return text
+        except Exception as exc:
+            last_error = exc
+            if _is_model_level_error(exc) and len(candidates) > 1:
+                continue                  # retired or rate-limited slug → next model
+            raise
+
+    raise ProviderError(f"all OpenRouter models failed; last error: {last_error}")
+
+
+# Which chain entry actually answered, so the UI reports the real model rather
+# than the first candidate we intended to use.
+_LAST_OPENROUTER_MODEL = {"value": ""}
 
 
 def call_gemini(prompt: str, model: str = "", temperature: float = DEFAULT_TEMPERATURE,
@@ -212,7 +322,7 @@ def call_groq(prompt: str, model: str = "", temperature: float = DEFAULT_TEMPERA
          "temperature": temperature},
         {"Authorization": f"Bearer {key}"},
         timeout)
-    return data["choices"][0]["message"]["content"]
+    return _extract_chat_text(data, "groq")
 
 
 def call_ollama(prompt: str, model: str = "", temperature: float = DEFAULT_TEMPERATURE,
@@ -322,10 +432,12 @@ def model_for(provider: str) -> str:
     """The model slug this provider would actually use right now."""
     if provider == "ollama":
         return resolve_ollama_model()
-    override = {
-        "openrouter": "OPENROUTER_MODEL", "gemini": "GEMINI_MODEL",
-        "groq": "GROQ_MODEL",
-    }.get(provider, "")
+    if provider == "openrouter":
+        # Report the chain entry that last succeeded; before the first call, the
+        # one we would try first. Reporting a slug that never answered would make
+        # the sidebar lie about which model produced the text on screen.
+        return _LAST_OPENROUTER_MODEL["value"] or openrouter_models()[0]
+    override = {"gemini": "GEMINI_MODEL", "groq": "GROQ_MODEL"}.get(provider, "")
     return get_secret(override, DEFAULT_MODELS.get(provider, "")) if override else ""
 
 

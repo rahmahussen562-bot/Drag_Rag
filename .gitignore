@@ -12,9 +12,18 @@ env/
 .env.local
 .streamlit/secrets.toml
 
-# Caches / generated artifacts (all rebuilt automatically from source data)
-data/doc_embeddings.npy
-data/doc_embeddings.meta.json
+# Generated artifacts.
+#
+# NOTE: data/doc_embeddings.npy is deliberately NOT ignored — it is committed.
+# Streamlit Community Cloud starts from a fresh container with no cache, and
+# encoding the 14,955-chunk corpus there costs ~285 s and ~308 MB of transient
+# memory, which blows both the boot timeout and the ~1 GB container limit.
+# Shipping the 23 MB matrix turns a 308 s boot into a 23 s boot. It is safe to
+# commit because stage 04 validates it against a SHA-256 content fingerprint and
+# silently re-encodes if the corpus or model ever changes.
+#
+# faiss.index IS ignored: it is rebuilt from the committed vectors in ~0.05 s,
+# so committing it would add 23 MB for no benefit.
 data/faiss.index
 
 # OS / editor

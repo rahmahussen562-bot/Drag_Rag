@@ -6,10 +6,10 @@ rag_pipeline.py — compatibility facade over the numbered pipeline stages.
 # chunking, retrieval and generation. That logic now lives in the seven numbered
 # stage files, where each step is documented and independently runnable.
 #
-# But `eval/run_eval.py` and the previous `app.py` import `RAGEngine` from here,
-# and the project rule is to refactor rather than rewrite. So this module keeps
-# its public API exactly as it was and DELEGATES every call to the stages. There
-# is no duplicated logic below — only adaptation:
+# But `eval/run_eval.py` imports `RAGEngine` from here, and the project rule is to
+# refactor rather than rewrite. So this module keeps its public API exactly as it
+# was and DELEGATES every call to the stages. There is no duplicated logic below —
+# only adaptation:
 #
 #     RAGEngine.__init__  →  01_documents + 03_chunking + 05_vector_store
 #     RAGEngine.retrieve  →  06_retrieve_context
@@ -85,7 +85,7 @@ class RAGEngine:
     """The original engine interface, now composed from the numbered stages.
 
     Parameters are unchanged from the pre-refactor version so existing callers
-    (eval/run_eval.py, app.py) need no edits.
+    (eval/run_eval.py) need no edits.
     """
 
     def __init__(self, data_path: Optional[str] = None, use_embeddings: bool = True,
@@ -149,6 +149,12 @@ class RAGEngine:
         elif result.mode == "llm":
             meta = {"mode": result.provider, "provider": result.provider,
                     "model": result.model}
+        elif result.mode == "llm_failed":
+            # A configured provider failed. Carry the error through instead of
+            # flattening it into "extractive", so a CLI/eval caller can tell a
+            # real outage apart from the intentional no-credentials mode.
+            meta = {"mode": "llm_failed", "attempts": result.attempts,
+                    "llm_error": result.llm_error}
         else:
             meta = {"mode": "extractive", "attempts": result.attempts}
 
