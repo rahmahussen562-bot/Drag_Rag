@@ -1,5 +1,9 @@
 # ── Core pipeline (required) ────────────────────────────────────────────────
-streamlit>=1.32
+# >=1.50 is a hard floor, not a preference: .streamlit/config.toml uses the
+# [theme.light]/[theme.dark] sections and baseRadius/showWidgetBorder keys that
+# earlier versions do not recognise, and an unknown key logs a config warning on
+# every Cloud boot.
+streamlit>=1.50
 numpy>=1.24
 pandas>=2.0
 scikit-learn>=1.3        # TF-IDF, cosine similarity, stopword fallback
@@ -8,8 +12,16 @@ requests>=2.31           # LLM provider HTTP calls
 rank-bm25>=0.2.2         # BM25 (stage 05 has a NumPy fallback if absent)
 
 # ── Semantic retrieval (stage 04/05) ────────────────────────────────────────
-# Pulls in torch (~200 MB). Comment BOTH lines out for a lightweight BM25-only
-# deploy — the app detects their absence and runs lexical-only.
+# Pulls in torch (~200 MB) transitively. Comment BOTH lines out for a
+# lightweight BM25-only deploy — the app detects their absence and runs
+# lexical-only.
+#
+# torch is deliberately NOT listed explicitly. sentence-transformers already
+# declares the version range it supports, and pinning it separately only creates
+# a second constraint that can conflict during resolution. torchvision is
+# deliberately absent too: nothing in this project imports it (it is a computer-
+# vision package), and on a ~1 GB Cloud container an unused ~200 MB dependency is
+# a real OOM risk rather than a harmless extra.
 sentence-transformers>=2.6
 faiss-cpu>=1.7           # vector store; falls back to a NumPy matmul if missing
 

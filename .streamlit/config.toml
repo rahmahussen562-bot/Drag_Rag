@@ -1,0 +1,62 @@
+# Streamlit theme + server configuration.
+#
+# Committed on purpose (unlike secrets.toml): the theme is part of the product,
+# and Streamlit Cloud reads this file at boot. Every key below is validated
+# against streamlit>=1.50 — using a key the running version does not know emits a
+# config warning on deploy, which is why requirements.txt pins that floor.
+
+[theme]
+# Teal rather than Streamlit's default red: this is a clinical information tool,
+# and red carries "danger" meaning that is reserved here for MAJOR drug
+# interactions and provider errors.
+primaryColor = "#0F9D8E"
+baseRadius = "0.6rem"
+buttonRadius = "0.5rem"
+showWidgetBorder = true
+showSidebarBorder = true
+linkUnderline = false
+
+font = "sans-serif"
+headingFont = "sans-serif"
+codeFont = "monospace"
+baseFontSize = 15
+
+# Semantic colours reused by the status badges in the app.
+greenColor = "#0F9D8E"
+orangeColor = "#D97706"
+redColor = "#DC2626"
+
+[theme.light]
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F7F8"
+textColor = "#16232B"
+borderColor = "#E2E8EA"
+codeBackgroundColor = "#F4F7F8"
+
+[theme.light.sidebar]
+backgroundColor = "#F8FAFB"
+secondaryBackgroundColor = "#FFFFFF"
+borderColor = "#E2E8EA"
+
+[theme.dark]
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#161B22"
+textColor = "#E6EDF3"
+borderColor = "#2A313C"
+codeBackgroundColor = "#161B22"
+
+[theme.dark.sidebar]
+backgroundColor = "#11161D"
+secondaryBackgroundColor = "#161B22"
+borderColor = "#2A313C"
+
+[server]
+# The corpus + DDInter CSVs are read-only assets; watching them wastes memory and
+# triggers pointless reruns on Cloud.
+fileWatcherType = "none"
+# Uploaded documents are chunked in memory; 25 MB is a generous clinical PDF and
+# keeps a hostile upload from exhausting the container.
+maxUploadSize = 25
+
+[browser]
+gatherUsageStats = false

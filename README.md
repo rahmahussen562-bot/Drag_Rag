@@ -347,14 +347,35 @@ it emitted `[Source N]` citations, kept the disclaimer, and grounded its answer 
 
 Setting `OPENROUTER_MODEL` in secrets pins one model and bypasses the chain entirely.
 
+### Free-tier daily quota
+
+OpenRouter's free tier caps **requests per day per account**, not per model:
+
+```
+429 "Rate limit exceeded: free-models-per-day.
+     Add 10 credits to unlock 1000 free model requests per day"
+```
+
+This is an **account** limit, so walking the model chain cannot help — every extra attempt is a
+guaranteed failure that burns latency. `_is_account_level_error()` detects it and stops after the
+first model (5 wasted calls → 1). Adding 10 credits to the OpenRouter account raises the cap to
+1000 requests/day.
+
 ### Failures are never silent
 
-A configured provider that fails is an **incident, not a mode**. The app distinguishes:
+A configured provider that fails is an **incident, not a mode**. The app distinguishes three cases:
 
 - `extractive` — no credentials anywhere. The designed, documented fallback; quiet by intent.
-- `llm_failed` — a provider *was* configured and every attempt failed. The UI raises a red banner
-  with the provider's own error text above the answer, so a bad key or retired slug can never hide
-  behind a plausible-looking sourced answer.
+- `llm_failed` — a provider *was* configured and every attempt failed. A red banner shows the
+  provider's own error above the answer, so a bad key or retired slug cannot hide behind a
+  plausible-looking sourced answer.
+- **fallback used** — the primary provider failed and a lower-priority one answered. An amber
+  banner names the substitution and the underlying error.
+
+That last case matters more than it looks. During development a local Ollama will happily cover for
+a rate-limited OpenRouter, so the app looks healthy while the *actual deployment target* — Cloud,
+where no local model exists — is broken. The banner is what stops that being discovered in
+production.
 
 ---
 

@@ -155,10 +155,26 @@ class LLMResponse:
     provider: str
     model: str
     attempts: list          # [(provider, "ok" | "error: …"), …] — shown in eval mode
+    # Set when a HIGHER-priority configured provider failed and a lower-priority
+    # one answered instead. Carries "provider: reason" for the failed primary.
+    fell_back_from: str = ""
 
     @property
     def ok(self) -> bool:
         return bool(self.text.strip())
+
+    @property
+    def is_fallback(self) -> bool:
+        """True if the answer did NOT come from the highest-priority provider.
+
+        # WHY surface this at all?
+        # OpenRouter is the designated primary. If it is down or rate-limited and
+        # a local Ollama quietly answers instead, the app looks perfectly healthy
+        # while the actual deployment target — Cloud, where no Ollama exists — is
+        # broken. Making the substitution visible is what stops that from being
+        # discovered in production instead of in development.
+        """
+        return bool(self.fell_back_from)
 
 
 class ProviderError(RuntimeError):
@@ -224,11 +240,29 @@ _MODEL_LEVEL_SIGNS = (
     "rate limit", "temporarily rate-limited", "no instances available",
 )
 
+# ACCOUNT-level limits masquerade as 429s but apply to the whole key, not to one
+# model. OpenRouter's free tier returns:
+#     429 "Rate limit exceeded: free-models-per-day. Add 10 credits to unlock
+#          1000 free model requests per day"
+# Walking the chain here is actively harmful: every extra attempt is a guaranteed
+# failure, adds latency to a user-facing request, and counts against the very
+# quota that is already exhausted. Detect it and stop after the first model.
+_ACCOUNT_LEVEL_SIGNS = (
+    "per-day", "per day", "free-models-per-day", "add credits",
+    "insufficient credits", "quota", "billing", "payment required", "402",
+)
+
+
+def _is_account_level_error(exc: Exception) -> bool:
+    return any(sign in str(exc).lower() for sign in _ACCOUNT_LEVEL_SIGNS)
+
 
 def _is_model_level_error(exc: Exception) -> bool:
     text = str(exc).lower()
     if "401" in text or "403" in text or "no auth credentials" in text:
         return False                      # bad/absent key — the chain cannot help
+    if _is_account_level_error(exc):
+        return False                      # whole key is capped — chain cannot help
     return any(sign in text for sign in _MODEL_LEVEL_SIGNS)
 
 
@@ -480,6 +514,12 @@ def generate(prompt: str, prefer: Optional[str] = None,
         order.insert(0, prefer)
 
     attempts: list[tuple[str, str]] = []
+    # The provider the operator actually intends to serve traffic: the pinned one,
+    # else the highest-priority configured one. If something further down the list
+    # answers instead, that substitution is reported rather than hidden.
+    intended = prefer if prefer else next((p for p in order if provider_configured(p)), "")
+    primary_failure = ""
+
     for provider in order:
         if not provider_configured(provider):
             attempts.append((provider, "not configured"))
@@ -488,14 +528,22 @@ def generate(prompt: str, prefer: Optional[str] = None,
             text = _CALLERS[provider](prompt, temperature=temperature, timeout=timeout)
             if text and text.strip():
                 attempts.append((provider, "ok"))
-                return LLMResponse(text=text, provider=provider,
-                                   model=model_for(provider), attempts=attempts)
+                return LLMResponse(
+                    text=text, provider=provider, model=model_for(provider),
+                    attempts=attempts,
+                    fell_back_from=primary_failure if provider != intended else "")
             attempts.append((provider, "empty response"))
+            if provider == intended and not primary_failure:
+                primary_failure = f"{provider}: empty response"
         except Exception as exc:
             # Record and continue — this is the whole point of the cascade.
-            attempts.append((provider, f"{type(exc).__name__}: {exc}"[:180]))
+            detail = f"{type(exc).__name__}: {exc}"[:180]
+            attempts.append((provider, detail))
+            if provider == intended and not primary_failure:
+                primary_failure = f"{provider}: {exc}"[:220]
 
-    return LLMResponse(text="", provider="", model="", attempts=attempts)
+    return LLMResponse(text="", provider="", model="", attempts=attempts,
+                       fell_back_from=primary_failure)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

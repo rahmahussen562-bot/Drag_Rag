@@ -8,9 +8,19 @@ venv/
 env/
 
 # ── SECRETS — never commit these ────────────────────────────────────────────
+#
+# These patterns are deliberately PATH-INDEPENDENT. An earlier version pinned the
+# exact path `.streamlit/secrets.toml`, which silently failed to cover a
+# `.streamlit1/secrets.toml` directory created by a typo — that file was staged
+# for commit. A secret must never be one keystroke away from being published, so
+# match the FILENAME anywhere in the tree and re-admit only the .example
+# templates.
+**/secrets.toml
+**/secrets.local.toml
 .env
-.env.local
-.streamlit/secrets.toml
+.env.*
+!.env.example
+!**/secrets.toml.example
 
 # Generated artifacts.
 #

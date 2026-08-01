@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stages import load  # noqa: E402
 
 import llm_providers  # noqa: E402
+import ui  # noqa: E402
 
 documents_stage = load("01_documents")
 chunking = load("03_chunking")
@@ -46,7 +47,9 @@ prompting = load("07_prompting")
 from interactions import InteractionDB, DDINTER_CITATION  # noqa: E402
 
 st.set_page_config(page_title="PhARMA RAG — Grounded Drug Q&A",
-                   page_icon="💊", layout="centered")
+                   page_icon="💊", layout="centered",
+                   initial_sidebar_state="expanded")
+ui.inject_css()
 
 DISCLAIMER = ("⚠️ **Educational tool — not medical advice.** Interaction and drug data can be "
               "incomplete. Always confirm with a pharmacist or prescriber.")
@@ -174,22 +177,13 @@ def render_interactions(res: dict) -> str:
     return "\n".join(lines)
 
 
-def render_sources(chunks) -> None:
-    """The citation list. Source numbering matches [Source N] in the answer.
-
-    # WHY show this by default rather than behind evaluation mode?
-    # "The answer cites its sources" is only meaningful if the user can READ those
-    # sources. This expander is what turns a citation from a claim into something
-    # verifiable in one click.
-    """
-    if not chunks:
-        return
-    with st.expander(f"📚 Sources used ({len(chunks)})"):
-        for rank, chunk in enumerate(chunks, 1):
-            st.markdown(f"**[Source {rank}]** `{chunk.title}` · *{chunk.field}* "
-                        f"· score={chunk.score:.3f}"
-                        + (f" · _{chunk.origin}_" if chunk.origin != "drug-corpus" else ""))
-            st.caption(chunk.text)
+# The citation list lives in ui.py as styled cards.
+#
+# # WHY is it shown by default rather than behind evaluation mode?
+# "The answer cites its sources" is only meaningful if the user can READ those
+# sources. This expander is what turns a citation from a claim into something
+# verifiable in one click.
+render_sources = ui.render_sources
 
 
 def render_evaluation(result) -> None:
@@ -278,7 +272,19 @@ with st.sidebar:
              "A pinned provider still falls back if it fails.")
     prefer = None if provider_choice == "auto" else provider_choice
 
-    retriever = get_retriever(use_embeddings, use_reranker)
+    # Building the index touches disk, the corpus JSON and (optionally) the
+    # embedding model. If any of that fails the app cannot function at all, so it
+    # gets a plain explanation and a stop — never a traceback in the sidebar.
+    try:
+        retriever = get_retriever(use_embeddings, use_reranker)
+    except Exception as exc:  # noqa: BLE001 — startup is the one place we must not crash
+        ui.error_box(
+            "Could not build the retrieval index.",
+            detail=f"{type(exc).__name__}: {exc}",
+            action="Check that `data/drugs_large.json` and `data/doc_embeddings.npy` "
+                   "are present in the deployment, then reload.")
+        st.stop()
+
     idb = load_interactions()
 
     use_rxnorm = st.toggle(
@@ -289,33 +295,40 @@ with st.sidebar:
 
     st.subheader("Status")
     n_uploaded = sum(len(v) for v in st.session_state.uploaded_docs.values())
-    st.markdown(f"- **Chunks indexed:** {len(retriever.df):,}")
-    st.markdown(f"- **Sources:** {retriever.df['drug'].nunique():,}")
-    if n_uploaded:
-        st.markdown(f"- **Your documents:** {len(st.session_state.uploaded_docs)} "
-                    f"file(s), {n_uploaded} section(s)")
     dense_backend = (retriever.store.dense.backend if retriever.store.has_dense
-                     else "off (BM25 only)")
-    st.markdown(f"- **Vector store:** `{dense_backend}`")
-    st.markdown(f"- **Lexical:** `{retriever.store.lexical.backend}`")
-    if retriever.reranker is not None:
-        st.markdown("- **Reranker:** 🟢 cross-encoder")
+                     else "BM25 only")
 
-    if isinstance(idb, Exception):
-        st.markdown("- **Interactions:** 🔴 not loaded")
-    else:
-        st.markdown(f"- **Interactions:** 🟢 {len(idb.pairs):,} pairs · {len(idb._canon):,} drugs")
+    rows = [
+        ui.stat_row("Chunks indexed", f"{len(retriever.df):,}"),
+        ui.stat_row("Sources", f"{retriever.df['drug'].nunique():,}"),
+    ]
+    if n_uploaded:
+        rows.append(ui.stat_row(
+            "Your documents",
+            f"{len(st.session_state.uploaded_docs)} file(s) · {n_uploaded} section(s)"))
+    rows.append(ui.stat_row("Vector store", dense_backend,
+                            tone="ok" if retriever.store.has_dense else "warn"))
+    rows.append(ui.stat_row("Lexical", retriever.store.lexical.backend, tone="ok"))
+    if retriever.reranker is not None:
+        rows.append(ui.stat_row("Reranker", "cross-encoder", tone="ok"))
+    rows.append(ui.stat_row(
+        "Interactions",
+        "not loaded" if isinstance(idb, Exception) else f"{len(idb.pairs):,} pairs",
+        tone="err" if isinstance(idb, Exception) else "ok"))
+    rows.append(ui.stat_row("LLM", status["active"] or "not configured",
+                            tone="ok" if status["active"] else "warn"))
+    st.markdown("".join(rows), unsafe_allow_html=True)
 
     if status["active"]:
-        st.markdown(f"- **LLM:** 🟢 {status['active']} · `{status['model']}`")
+        st.caption(f"Model: `{status['model']}`")
     else:
-        st.markdown("- **LLM:** 🔴 none → extractive answers")
-        st.info("No LLM key found. The app still works and still cites sources — it "
-                "returns the retrieved text directly. For generated answers add "
-                "`OPENROUTER_API_KEY`, `GEMINI_API_KEY` or `GROQ_API_KEY` to Streamlit "
-                "secrets (or a local `.env`).", icon="ℹ️")
+        st.info("No LLM key found — answers fall back to **retrieved text**, still "
+                "cited. Add `OPENROUTER_API_KEY` in Streamlit **Settings → Secrets** "
+                "(or a local `.streamlit/secrets.toml`) for generated answers.",
+                icon="ℹ️")
 
-    if st.button("🗑️ Clear chat"):
+    st.divider()
+    if st.button("🗑️ Clear chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
@@ -445,12 +458,15 @@ else:
 
     picked = None
     if not st.session_state.messages:
-        st.markdown("**Try one:**")
-        examples = ["How does metformin work?",
-                    "Does warfarin interact with naproxen?",
-                    "Side effects of aspirin?"]   # aspirin absent → honest refusal
-        for col, example in zip(st.columns(3), examples):
-            if col.button(example, use_container_width=True):
+        st.markdown("")
+        st.caption("TRY ONE")
+        # The third example is chosen deliberately: aspirin is absent from the
+        # corpus, so it demonstrates the refusal behaviour rather than hiding it.
+        examples = [("💊", "How does metformin work?"),
+                    ("⚠️", "Does warfarin interact with naproxen?"),
+                    ("🛑", "Side effects of aspirin?")]
+        for col, (icon, example) in zip(st.columns(3), examples):
+            if col.button(f"{icon}  {example}", use_container_width=True):
                 picked = example
 
     prompt_text = st.chat_input("Ask about a drug or your documents…") or picked
@@ -471,34 +487,111 @@ else:
                                       + render_interactions(res) + "\n\n---\n")
                     st.markdown(interaction_md, unsafe_allow_html=True)
 
-            with st.spinner("Retrieving sources and composing an answer…"):
-                result = prompting.answer_question(
-                    prompt_text, retriever, k=top_k, use_llm=True, prefer=prefer)
+            # ── Staged progress ──────────────────────────────────────────────
+            # The pipeline reports each transition through `on_stage`, so what the
+            # user sees is the work actually happening rather than one opaque
+            # spinner. Retrieval and generation have very different latencies
+            # (~0.1 s vs 3-20 s), and naming the slow one is what makes the wait
+            # feel accounted for instead of broken.
+            _STAGE_LABELS = {
+                "retrieving": "🔍 Retrieving relevant sources…",
+                "building":   "🧩 Building the grounded prompt…",
+                "generating": "✍️ Generating answer…",
+                "verifying":  "🔎 Verifying citations…",
+                "refused":    "🛑 No supporting sources found",
+            }
+            result = None
+            with st.status("🔍 Retrieving relevant sources…", expanded=False) as box:
+                def on_stage(name: str, detail: str = "") -> None:
+                    label = _STAGE_LABELS.get(name, name)
+                    if detail:
+                        label = f"{label}  ·  {detail}"
+                    box.update(label=label)
 
-            # A configured provider that failed is an incident, not a mode — show
-            # the provider's own error ABOVE the answer so a bad key or a retired
-            # model slug can never hide behind a plausible-looking sourced answer.
-            if result.llm_failed:
-                st.error(
-                    f"**LLM generation failed — showing retrieved sources instead.**\n\n"
-                    f"`{result.llm_error}`\n\n"
-                    f"Check `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` in "
-                    f"**Settings → Secrets**. The retrieval pipeline below is unaffected.",
-                    icon="🚨")
+                try:
+                    result = prompting.answer_question(
+                        prompt_text, retriever, k=top_k, use_llm=True,
+                        prefer=prefer, on_stage=on_stage)
+                except Exception as exc:  # noqa: BLE001 — last line of defence
+                    # No traceback ever reaches the user. This is the only place a
+                    # pipeline exception can surface, and it is turned into a
+                    # sentence plus a next action, with the detail folded away.
+                    box.update(label="⚠️ Could not complete this request",
+                               state="error", expanded=False)
+                    ui.error_box(
+                        "Something went wrong while answering.",
+                        detail=f"{type(exc).__name__}: {exc}",
+                        action="Try rephrasing your question, or reload the page. "
+                               "Your uploaded documents are preserved.")
 
-            st.markdown(result.text, unsafe_allow_html=True)
-            render_sources(result.chunks)
+                if result is not None:
+                    if result.refused:
+                        box.update(label="🛑 No supporting sources — answer withheld",
+                                   state="complete", expanded=False)
+                    elif result.llm_failed:
+                        box.update(label="⚠️ LLM unavailable — showing retrieved sources",
+                                   state="error", expanded=False)
+                    else:
+                        box.update(label="✅ Answer complete", state="complete",
+                                   expanded=False)
 
-            if result.mode == "llm":
-                st.caption(f"↳ generated by **{result.provider}** · `{result.model}`")
-            elif result.mode == "extractive" and not result.refused:
-                st.caption("↳ retrieval-only answer (no LLM configured)")
+            # Answer renders inside the SAME assistant bubble as the status box —
+            # a second st.chat_message would draw a second avatar for one reply.
+            if result is not None:
+                # A configured provider that failed is an incident, not a mode.
+                # Show the provider's own error ABOVE the answer so a bad key or a
+                # retired model slug can never hide behind a plausible answer.
+                if result.llm_failed:
+                    ui.error_box(
+                        "LLM generation failed — showing retrieved sources instead.",
+                        detail=result.llm_error,
+                        action="Check `OPENROUTER_API_KEY` in **Settings → Secrets**. "
+                               "Retrieval and citations below are unaffected.")
 
-            if evaluation_mode:
-                render_evaluation(result)
+                # A lower-priority provider answering is not an error, but it is
+                # never something to discover in production. Saying so here is
+                # what turns "works on my machine" (local Ollama covering for a
+                # rate-limited OpenRouter) into a visible, actionable warning.
+                if result.fell_back_from:
+                    st.warning(
+                        f"**Answered by fallback provider `{result.provider}`** — "
+                        f"the primary provider failed.\n\n`{result.fell_back_from}`\n\n"
+                        f"On Streamlit Cloud there is no local model, so this "
+                        f"question would return an error until the primary "
+                        f"provider recovers.", icon="⚠️")
 
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": interaction_md + result.text,
-            "chunks": result.chunks,
-        })
+                st.markdown(f'<div class="answer">{result.text}</div>',
+                            unsafe_allow_html=True)
+
+                # ── Meta strip: provenance at a glance ───────────────────────
+                if result.mode == "llm":
+                    badges = [ui.pill(f"⚡ {result.provider}", "ok", dot=True),
+                              ui.pill(result.model)]
+                    if result.verification:
+                        v = result.verification
+                        badges.append(ui.pill(
+                            f"📎 {len(v.citations)}/{v.n_sources} cited",
+                            "ok" if v.citations else "warn"))
+                        badges.append(ui.pill(f"🎯 {v.overlap:.0%} grounded",
+                                              "ok" if v.overlap >= 0.3 else "warn"))
+                    st.markdown(ui.pills(*badges), unsafe_allow_html=True)
+                elif result.refused:
+                    st.markdown(ui.pills(ui.pill("🛑 Withheld — not in corpus", "warn")),
+                                unsafe_allow_html=True)
+                elif result.mode == "extractive":
+                    st.markdown(ui.pills(ui.pill("📄 Retrieved text (no LLM)", "warn")),
+                                unsafe_allow_html=True)
+
+                render_sources(result.chunks)
+
+                if evaluation_mode:
+                    render_evaluation(result)
+
+                # Guarded by `result is not None`: when the pipeline raised, there
+                # is no answer to persist, and appending would crash on the next
+                # rerun while replaying history.
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": interaction_md + result.text,
+                    "chunks": result.chunks,
+                })

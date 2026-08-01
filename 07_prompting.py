@@ -277,6 +277,9 @@ class Answer:
     attempts: list = dc_field(default_factory=list)
     verification: Optional[Verification] = None
     llm_error: str = ""                # populated ONLY when mode == "llm_failed"
+    # Set when the intended primary provider failed and a lower-priority one
+    # answered. Carries "provider: reason" so the UI can name what broke.
+    fell_back_from: str = ""
 
     @property
     def refused(self) -> bool:
@@ -298,18 +301,43 @@ class Answer:
 
 
 def answer_question(query: str, retriever, k: int = 5, use_llm: bool = True,
-                    prefer: Optional[str] = None, temperature: float = 0.0) -> Answer:
-    """The complete RAG loop: retrieve → pack → prompt → generate → verify."""
+                    prefer: Optional[str] = None, temperature: float = 0.0,
+                    on_stage: Optional[callable] = None) -> Answer:
+    """The complete RAG loop: retrieve → pack → prompt → generate → verify.
+
+    `on_stage(stage, detail)` is an optional progress callback invoked as the
+    pipeline advances: "retrieving" → "building" → "generating" → "verifying".
+
+    # WHY a callback instead of letting the UI drive the steps itself?
+    # The UI needs to show honest per-stage progress ("Retrieving…", then
+    # "Generating…"), but splitting this function apart in streamlit_app.py would
+    # move orchestration — the abstention rule, the packing order, the fallback
+    # policy — into the presentation layer, where it could drift from what the
+    # CLI and the eval harness execute. The callback lets the UI *observe* the
+    # pipeline without owning any part of it, so every caller still runs
+    # byte-identical logic.
+    """
+    def stage(name: str, detail: str = "") -> None:
+        if on_stage is not None:
+            try:
+                on_stage(name, detail)
+            except Exception:
+                # Progress reporting must never be able to fail an answer.
+                pass
+
     # 6a — RETRIEVE. If retrieval abstained, we stop here. Nothing is sent to an
     #      LLM when there is no context, because a model given no context answers
     #      from memory — precisely the failure the whole system exists to prevent.
+    stage("retrieving")
     outcome = retriever.retrieve_context(query, k=k)
     if not outcome.ok:
+        stage("refused", outcome.status)
         n_entities = len(retriever.entity_vocab)
         return Answer(text=refusal_message(outcome, n_entities), chunks=[],
                       mode="refused", status=outcome.status)
 
     # 6b — PACK + BUILD.
+    stage("building", f"{len(outcome.chunks)} sources")
     context = pack_context(outcome.chunks)
     prompt = build_prompt(query, context)
 
@@ -321,13 +349,16 @@ def answer_question(query: str, retriever, k: int = 5, use_llm: bool = True,
                       attempts=[("(llm disabled)", "skipped")],
                       verification=verify_answer(text, outcome.chunks))
 
+    stage("generating", prefer or "auto")
     response = llm_providers.generate(prompt, prefer=prefer, temperature=temperature)
     if response.ok:
+        stage("verifying", f"{response.provider} · {response.model}")
         text = ensure_disclaimer(extract_answer(response.text))
         return Answer(text=text, chunks=outcome.chunks, mode="llm",
                       status=outcome.status, provider=response.provider,
                       model=response.model, prompt=prompt, context=context,
                       attempts=response.attempts,
+                      fell_back_from=response.fell_back_from,
                       verification=verify_answer(text, outcome.chunks))
 
     # Generation did not produce text. Split the two very different reasons apart
