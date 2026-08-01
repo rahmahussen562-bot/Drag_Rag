@@ -401,7 +401,7 @@ if __name__ == "__main__":
         print(f"  {flat.backend:11s} {flat_ms:6.2f} ms/query   (exact)")
         print(f"  {ivf.backend:11s} {ivf_ms:6.2f} ms/query   top-5 recall vs exact: {overlap}/5")
         print(f"  → at {store.dense.n:,} vectors exact search is already ~{flat_ms:.1f} ms,")
-        print(f"    so we keep IndexFlatIP and pay no recall penalty. IVF turns on")
+        print("    so we keep IndexFlatIP and pay no recall penalty. IVF turns on")
         print(f"    automatically past {IVF_THRESHOLD:,} vectors.")
     except Exception as exc:
         print(f"  comparison skipped: {type(exc).__name__}: {exc}")

@@ -25,6 +25,7 @@ Public API preserved:
 """
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 from typing import Optional
@@ -54,12 +55,11 @@ CHUNK_OVERLAP = _chunking.CHUNK_OVERLAP
 ALPHA = _retrieval.ALPHA
 _drug_identity_tokens = _retrieval.identity_tokens
 
-# Reported in the UI sidebar; resolved once the lexical store is first built.
-BM25_SOURCE = "rank_bm25"
-try:
-    import rank_bm25  # noqa: F401
-except Exception:
-    BM25_SOURCE = "numpy-fallback"
+# Reported in the UI sidebar. Probed with find_spec rather than a bare `import`
+# so we detect availability without paying the import cost or leaving an unused
+# module bound in this namespace.
+BM25_SOURCE = ("rank_bm25" if importlib.util.find_spec("rank_bm25")
+               else "numpy-fallback")
 
 # Retrieval statuses (stage 06) → the legacy `meta["mode"]` strings that
 # eval/run_eval.py matches on.

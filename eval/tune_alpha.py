@@ -130,7 +130,7 @@ def main() -> int:
 
     dense_only = rows[0][1]
     print("-" * 56)
-    print(f"\nDrug recall is the safety-critical metric — maximised first.")
+    print("\nDrug recall is the safety-critical metric — maximised first.")
     print(f"  best drug recall      : {best_drug:.0%}  "
           f"(reached at ALPHA ≥ {min(a for a, r in safe):.2f})")
     print(f"  pure-dense (ALPHA=0)  : drug recall {dense_only['drug_recall']:.0%} "
