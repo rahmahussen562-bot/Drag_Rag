@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
 from stages import load  # noqa: E402
 
 documents_stage = load("01_documents")
+preprocessing = load("02_preprocessing")
 chunking = load("03_chunking")
 representation = load("04_vector_representation")
 vector_store = load("05_create_vector_store")

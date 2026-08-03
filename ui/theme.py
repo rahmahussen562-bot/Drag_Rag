@@ -96,6 +96,48 @@ h2, h3 { font-weight: 650; letter-spacing: -0.01em; }
 .scorekey { display: flex; gap: .6rem; font-size: .68rem; opacity: .6;
             font-variant-numeric: tabular-nums; }
 
+/* ── Source card extras: origin badges, highlight, label link ───────────── */
+.srccard .badge {
+  font-size: .66rem; font-weight: 700; letter-spacing: .02em;
+  padding: .1em .45em; border-radius: .3rem; text-transform: uppercase;
+}
+.srccard .badge.fda { color: #2563EB;
+  background: color-mix(in srgb, #2563EB 14%, transparent); }
+.srccard .badge.up  { color: #7C3AED;
+  background: color-mix(in srgb, #7C3AED 16%, transparent); text-transform: none; }
+mark.hl { background: color-mix(in srgb, #FACC15 42%, transparent);
+          color: inherit; border-radius: .18em; padding: 0 .1em; }
+a.srclink { font-size: .72rem; opacity: .65; text-decoration: none;
+            display: inline-block; margin-top: .35rem; }
+a.srclink:hover { opacity: 1; text-decoration: underline; }
+
+/* ── Persona cards (the Ask page's two-product switch) ──────────────────── */
+.persona {
+  display: flex; gap: .75rem; margin: .2rem 0 1rem;
+}
+.pcard {
+  flex: 1; border-radius: .7rem; padding: .8rem .9rem;
+  border: 1px solid color-mix(in srgb, var(--text-color) 14%, transparent);
+  background: color-mix(in srgb, var(--text-color) 3%, transparent);
+}
+.pcard.on { border-color: var(--primary-color); border-width: 2px;
+            background: color-mix(in srgb, var(--primary-color) 10%, transparent); }
+.pcard .pl { font-weight: 700; font-size: .95rem; display: flex;
+             align-items: center; gap: .4rem; }
+.pcard .pd { font-size: .78rem; opacity: .7; margin-top: .2rem; line-height: 1.45; }
+.pcard .pm { font-size: .7rem; opacity: .55; margin-top: .45rem;
+             font-variant-numeric: tabular-nums; }
+
+/* ── Pipeline stepper (Architecture page + live trace) ──────────────────── */
+.step { display: flex; align-items: baseline; gap: .6rem; padding: .28rem 0;
+        border-bottom: 1px dashed color-mix(in srgb, var(--text-color) 9%, transparent); }
+.step:last-child { border-bottom: none; }
+.step .sn { font-size: .68rem; font-weight: 700; opacity: .5; min-width: 1.6rem; }
+.step .st { font-weight: 600; font-size: .84rem; min-width: 9rem; }
+.step .sd { font-size: .78rem; opacity: .68; }
+.step .sms { margin-left: auto; font-size: .7rem; opacity: .5;
+             font-variant-numeric: tabular-nums; }
+
 /* ── Answer block ───────────────────────────────────────────────────────── */
 .answer { font-size: .97rem; line-height: 1.65; }
 .answer p { margin-bottom: .6rem; }

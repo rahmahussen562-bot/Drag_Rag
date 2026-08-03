@@ -13,12 +13,14 @@ what enters the prompt — lives in the numbered stage modules.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 import streamlit as st
 
 from ui.components import (FIRST_LABEL, answer_badges, error_box,
                            fallback_warning, finalise, make_on_stage,
                            render_evaluation, render_sources)
+from ui.pages.audit import record
 from ui.pages.interactions import render_interaction_block
 
 # ── Interaction-intent detection for the chat path ───────────────────────────
@@ -142,10 +144,18 @@ def render(ctx) -> None:
         if badges:
             st.markdown(badges, unsafe_allow_html=True)
 
-        render_sources(result.chunks)
+        render_sources(result.chunks, query=prompt_text,
+                       alpha=ctx.retriever.alpha,
+                       reranked=ctx.retriever.reranker is not None)
 
         if ctx.evaluation_mode:
             render_evaluation(result)
+
+        # Every answer is filed, including refusals — a refusal is exactly the
+        # kind of event a pharmacy needs a record of.
+        record(result, prompt_text,
+               ctx.persona.label if ctx.persona else "—",
+               datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
         # Guarded by `result is not None`: when the pipeline raised, there is no
         # answer to persist, and appending would crash on the next rerun while
