@@ -155,7 +155,13 @@ class AppContext:
     evaluation_mode: bool
     use_embeddings: bool
     use_reranker: bool
+    agent: object = None              # the active persona (agents.Agent)
 
     @property
     def interactions_available(self) -> bool:
         return not isinstance(self.idb, Exception)
+
+    @property
+    def persona(self):
+        """The active persona's AgentConfig."""
+        return self.agent.config if self.agent is not None else None

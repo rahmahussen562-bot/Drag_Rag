@@ -17,10 +17,11 @@ from __future__ import annotations
 import streamlit as st
 
 import llm_providers
+from agents import DEFAULT_AGENT, available, config_of, get_agent
 from ui.components import error_box
 from ui.pages import PAGES
 from ui.state import AppContext, get_retriever, get_rxnorm, load_interactions
-from ui.theme import stat_row
+from ui.theme import pill, pills, stat_row
 
 
 def render():
@@ -32,6 +33,21 @@ def render():
 
         page_label = st.radio("Tool", list(PAGES), index=0)
 
+        # ── Persona ──────────────────────────────────────────────────────────
+        # The single most important control in the app: it changes which label
+        # sections are readable, how many sources are retrieved, which prompt is
+        # used, and what is enforced on the answer afterwards.
+        st.subheader("Who is asking?")
+        agent_ids = available()
+        agent_id = st.radio(
+            "Persona",
+            agent_ids,
+            format_func=lambda a: config_of(a).label,
+            index=agent_ids.index(DEFAULT_AGENT) if DEFAULT_AGENT in agent_ids else 0,
+            label_visibility="collapsed")
+        cfg = config_of(agent_id)
+        st.caption(cfg.description)
+
         st.subheader("Retrieval")
         use_embeddings = st.toggle(
             "Semantic + hybrid retrieval", value=True,
@@ -39,7 +55,10 @@ def render():
         use_reranker = st.toggle(
             "Cross-encoder reranker", value=False,
             help="Highest quality, slower. Re-scores the top 40 candidates jointly with the query.")
-        top_k = st.slider("Sources per answer (k)", 3, 10, 5)
+        # Default k follows the persona (patient 4, practitioner 8) but stays
+        # user-overridable — the slider is how the divergence is demonstrated.
+        top_k = st.slider("Sources per answer (k)", 3, 10, cfg.k,
+                          key=f"k_{agent_id}")
         evaluation_mode = st.toggle(
             "🔬 Evaluation mode", value=False,
             help="Show the retrieved chunks, component scores, the exact prompt, "
@@ -88,7 +107,7 @@ def render():
     ctx = AppContext(
         retriever=retriever, idb=idb, top_k=top_k, prefer=prefer,
         evaluation_mode=evaluation_mode, use_embeddings=use_embeddings,
-        use_reranker=use_reranker)
+        use_reranker=use_reranker, agent=get_agent(agent_id))
     return page_label, ctx
 
 

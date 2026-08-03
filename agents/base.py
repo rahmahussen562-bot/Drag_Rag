@@ -107,6 +107,82 @@ class Agent(Protocol):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Shared context building
+#
+# # WHY does field policy live here rather than in each agent?
+# Because "which sections of a label is this reader allowed to see" is the same
+# mechanism for every persona — only the field SET differs, and that is config.
+# One implementation means one place for the allowlist bug to not be.
+# ─────────────────────────────────────────────────────────────────────────────
+#: How many extra candidates to retrieve when a persona filters by field.
+#
+# # WHY over-retrieve at all?
+# The field policy runs AFTER stage 06 has already trimmed to k. Ask the retriever
+# for 4 and filter 3 of them away and the patient gets ONE source — measured, not
+# hypothetical: that is exactly what the first run of the persona tests produced.
+# Fetching a wider pool and trimming afterwards is what makes "k=4" mean four
+# readable sources rather than four candidates. Retrieval is ~2 ms, so the extra
+# candidates are free; a starved context is not.
+OVERFETCH = 5
+
+
+def fetch_k(config: AgentConfig, k: Optional[int] = None) -> int:
+    """How many candidates to ask stage 06 for, given this persona's policy."""
+    effective = k or config.k
+    if config.allowed_fields is None and not config.blocked_fields:
+        return effective                      # no filtering → no need to over-fetch
+    return min(effective * OVERFETCH, 60)     # cap: the pool is not free forever
+
+
+def select_chunks(config: AgentConfig, chunks: list, limit: Optional[int] = None) -> list:
+    """Apply a persona's field policy, packing order and k. Returns new chunks.
+
+    Order of operations matters and is deliberate:
+      1. blocked_fields   — a hard deny, applied first so nothing can re-admit it
+      2. allowed_fields   — an allowlist, when the persona declares one
+      3. packing order    — safety-first for lay readers, score order otherwise
+      4. k                — trim last, so the trim sees the persona's ordering
+    """
+    out = [c for c in chunks if c.field not in config.blocked_fields]
+    if config.allowed_fields is not None:
+        out = [c for c in out if c.field in config.allowed_fields]
+
+    if config.reading_level == "plain":
+        # # WHY reorder for a lay reader?
+        # Attention favours the EDGES of a long context ("lost in the middle"), so
+        # whichever source lands first is the one most likely to shape the answer.
+        # For a patient that must be the safety text, not the marketing-flavoured
+        # indications paragraph that usually scores highest.
+        priority = {"contraindications": 0, "side_effects": 1, "description": 2,
+                    "indications": 3}
+        out.sort(key=lambda c: (priority.get(c.field, 9), -c.score))
+
+    return out[:(limit or config.k)]
+
+
+def numbers_in(text: str) -> set:
+    """Numeric tokens in a string — the raw material for the hallucination check."""
+    import re
+    return set(re.findall(r"\d+(?:\.\d+)?", str(text or "")))
+
+
+def unsupported_numbers(answer: str, chunks: list) -> list:
+    """Numbers in the answer that appear in NO source chunk.
+
+    # WHY is this the highest-value check for a medical buyer?
+    # Because the dangerous hallucination in this domain is not a wrong sentence,
+    # it is a wrong NUMBER inside a right-looking sentence. A fabricated dose is
+    # fluent, correctly cited, and clinically actionable. Citations cannot catch
+    # it; word overlap cannot catch it. Comparing numeric tokens against the union
+    # of the supplied sources can.
+    """
+    supported: set = set()
+    for c in chunks:
+        supported |= numbers_in(c.text)
+    return sorted(n for n in numbers_in(answer) if n not in supported)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Registry — a third persona is a registration, not a rewrite.
 # ─────────────────────────────────────────────────────────────────────────────
 _AGENTS: dict[str, Callable[[], Agent]] = {}

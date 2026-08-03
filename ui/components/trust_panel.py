@@ -25,6 +25,15 @@ def answer_badges(result) -> str:
     Returns an HTML string (caller decides where to place it), or "" when the
     answer carries nothing worth badging.
     """
+    # The persona is provenance too — the same question answered as Patient and as
+    # Practitioner is two different products, so the badge says which one ran.
+    lead = [pill(f"👤 {result.agent}", dot=True)] if result.agent else []
+
+    # A field the persona's policy removed is a deliberate omission, and the user
+    # is entitled to know a section was withheld rather than simply absent.
+    if result.dropped_fields:
+        lead.append(pill(f"🚫 withheld: {', '.join(result.dropped_fields)}", "warn"))
+
     if result.mode == "llm":
         badges = [pill(f"⚡ {result.provider}", "ok", dot=True), pill(result.model)]
         v = result.verification
@@ -33,13 +42,19 @@ def answer_badges(result) -> str:
                                "ok" if v.citations else "warn"))
             badges.append(pill(f"🎯 {v.overlap:.0%} grounded",
                                "ok" if v.overlap >= 0.3 else "warn"))
-        return pills(*badges)
+        return pills(*lead, *badges)
 
+    if result.status == "red_flag":
+        return pills(*lead, pill("🚑 Emergency triage — RAG bypassed", "err"))
+    if result.status == "medication_change":
+        return pills(*lead, pill("🛑 Medication-change request — declined", "warn"))
+    if result.status == "persona_field_policy":
+        return pills(*lead, pill("🛑 Withheld — outside this persona's sections", "warn"))
     if result.refused:
-        return pills(pill("🛑 Withheld — not in corpus", "warn"))
+        return pills(*lead, pill("🛑 Withheld — not in corpus", "warn"))
     if result.mode == "extractive":
-        return pills(pill("📄 Retrieved text (no LLM)", "warn"))
-    return ""
+        return pills(*lead, pill("📄 Retrieved text (no LLM)", "warn"))
+    return pills(*lead) if lead else ""
 
 
 def render_evaluation(result) -> None:

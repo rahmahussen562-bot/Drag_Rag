@@ -31,10 +31,16 @@ from .base import (  # noqa: F401
 )
 
 # Importing the implementations is what populates the registry.
-from .patient import RED_FLAGS, PatientAgent, is_red_flag  # noqa: F401
+from .patient import (  # noqa: F401
+    RED_FLAGS,
+    PatientAgent,
+    is_medication_change,
+    is_red_flag,
+)
 from .practitioner import PractitionerAgent  # noqa: F401
 
 __all__ = [
     "AgentConfig", "Agent", "register", "get_agent", "config_of", "available",
-    "DEFAULT_AGENT", "PatientAgent", "PractitionerAgent", "is_red_flag", "RED_FLAGS",
+    "DEFAULT_AGENT", "PatientAgent", "PractitionerAgent",
+    "is_red_flag", "RED_FLAGS", "is_medication_change",
 ]

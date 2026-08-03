@@ -20,7 +20,6 @@ from ui.components import (FIRST_LABEL, answer_badges, error_box,
                            fallback_warning, finalise, make_on_stage,
                            render_evaluation, render_sources)
 from ui.pages.interactions import render_interaction_block
-from ui.state import prompting
 
 # ── Interaction-intent detection for the chat path ───────────────────────────
 _INTENT_WORDS = {"interact", "interacts", "interaction", "interactions", "together",
@@ -35,7 +34,18 @@ def interaction_intent(q: str) -> bool:
 
 
 def render(ctx) -> None:
+    persona = ctx.persona
     st.title("Ask a question")
+
+    if persona is not None:
+        # State the persona in the page, not just the sidebar. The whole claim is
+        # that the same question gets a different answer depending on who asks —
+        # that is only legible if the reader can see which one is active.
+        fields = ("all label sections" if persona.allowed_fields is None
+                  else ", ".join(sorted(persona.allowed_fields)))
+        st.caption(f"**Answering as: {persona.label}** — {persona.description}  \n"
+                   f"Reads: {fields} · k={persona.k}")
+
     has_uploads = bool(st.session_state.uploaded_docs)
     st.caption("e.g. *“How does metformin work?”*, *“Does warfarin interact with naproxen?”*"
                + (", or ask about your uploaded documents." if has_uploads else ""))
@@ -82,7 +92,10 @@ def render(ctx) -> None:
         result = None
         with st.status(FIRST_LABEL, expanded=False) as box:
             try:
-                result = prompting.answer_question(
+                # The persona owns the answer. It supplies the field policy, the
+                # packing order, the prompt and the post-generation enforcement;
+                # stage 07 still runs the loop, so every caller shares one path.
+                result = ctx.agent.answer(
                     prompt_text, ctx.retriever, k=ctx.top_k, use_llm=True,
                     prefer=ctx.prefer, on_stage=make_on_stage(box))
             except Exception as exc:  # noqa: BLE001 — last line of defence
@@ -117,7 +130,13 @@ def render(ctx) -> None:
 
         fallback_warning(result)
 
-        st.markdown(f'<div class="answer">{result.text}</div>', unsafe_allow_html=True)
+        # Red-flag triage gets its own treatment: it is not a refusal-with-
+        # suggestions, it is an instruction to stop using the software.
+        if result.status == "red_flag":
+            st.error(result.text, icon="🚑")
+        else:
+            st.markdown(f'<div class="answer">{result.text}</div>',
+                        unsafe_allow_html=True)
 
         badges = answer_badges(result)
         if badges:

@@ -106,15 +106,20 @@ def pack_context(chunks, max_chars: int = MAX_CONTEXT_CHARS) -> str:
     return "\n\n".join(parts)
 
 
-def build_prompt(query: str, context: str) -> str:
+def build_prompt(query: str, context: str,
+                 system_prompt: Optional[str] = None) -> str:
     """Assemble the full grounded prompt: rules + context + question.
 
     # WHY does the context come BEFORE the question?
     # Attention degrades in the middle of long inputs ("lost in the middle").
     # Putting the rules first and the question last places both of the things the
     # model must obey at the high-attention edges, with the bulk material between.
+
+    `system_prompt` lets a persona (see agents/) swap the RULES block for its own
+    while keeping this layout — the part that was tuned — identical. It defaults to
+    SYSTEM_PROMPT, so every existing caller is unaffected.
     """
-    return (f"{SYSTEM_PROMPT}\n\n"
+    return (f"{system_prompt or SYSTEM_PROMPT}\n\n"
             f"---\nCONTEXT:\n{context}\n---\n\n"
             f"QUESTION: {query}\n\n"
             f"ANSWER (include [Source N] citations and the medical disclaimer):")
@@ -270,6 +275,8 @@ class Answer:
     chunks: list                       # the retrieved sources, in citation order
     mode: str                          # "llm" | "extractive" | "llm_failed" | "refused"
     status: str                        # the retrieval status behind it
+    agent: str = ""                    # persona that produced it ("" = no persona)
+    dropped_fields: tuple = ()         # fields a persona's allowlist removed
     provider: str = ""
     model: str = ""
     prompt: str = ""                   # the exact prompt sent (evaluation mode)
@@ -302,11 +309,31 @@ class Answer:
 
 def answer_question(query: str, retriever, k: int = 5, use_llm: bool = True,
                     prefer: Optional[str] = None, temperature: float = 0.0,
-                    on_stage: Optional[callable] = None) -> Answer:
+                    on_stage: Optional[callable] = None,
+                    system_prompt: Optional[str] = None,
+                    select: Optional[callable] = None,
+                    postprocess: Optional[callable] = None,
+                    agent: str = "") -> Answer:
     """The complete RAG loop: retrieve → pack → prompt → generate → verify.
 
     `on_stage(stage, detail)` is an optional progress callback invoked as the
     pipeline advances: "retrieving" → "building" → "generating" → "verifying".
+
+    # THE THREE PERSONA HOOKS
+    # Two agents must differ in their CONTEXT BUILDING and their PROMPT without
+    # either owning a second copy of this loop — a forked loop is how the CLI, the
+    # eval harness and the app stop running the same code. So the loop stays here
+    # and exposes exactly three seams:
+    #
+    #   select(chunks)        -> chunks   after retrieval, before packing.
+    #                            Field allowlists, persona packing order, k trim.
+    #   system_prompt         -> str      swaps the RULES block only.
+    #   postprocess(text, ch) -> str      enforcement that must not be optional:
+    #                            escalation notices, heading schemas, advisory
+    #                            re-framing. A rule is a request; this is a check.
+    #
+    # All three default to None, reproducing the original behaviour exactly — which
+    # is what let Phase 2 ship against an already-green regression gate.
 
     # WHY a callback instead of letting the UI drive the steps itself?
     # The UI needs to show honest per-stage progress ("Retrieving…", then
@@ -325,6 +352,18 @@ def answer_question(query: str, retriever, k: int = 5, use_llm: bool = True,
                 # Progress reporting must never be able to fail an answer.
                 pass
 
+    def finish(text: str, used: list) -> str:
+        """Run a persona's enforcement over ANY outgoing text.
+
+        # WHY does this cover refusals too?
+        # A refusal IS an answer, and for a lay reader it is arguably the most
+        # important one — it is the moment they still need somewhere to go.
+        # Skipping enforcement here produced a patient refusal that declined to
+        # help and then failed to say who could, leaving rule 7 of the patient
+        # prompt unenforced on exactly the path that needed it most.
+        """
+        return postprocess(text, used) if postprocess is not None else text
+
     # 6a — RETRIEVE. If retrieval abstained, we stop here. Nothing is sent to an
     #      LLM when there is no context, because a model given no context answers
     #      from memory — precisely the failure the whole system exists to prevent.
@@ -333,38 +372,62 @@ def answer_question(query: str, retriever, k: int = 5, use_llm: bool = True,
     if not outcome.ok:
         stage("refused", outcome.status)
         n_entities = len(retriever.entity_vocab)
-        return Answer(text=refusal_message(outcome, n_entities), chunks=[],
-                      mode="refused", status=outcome.status)
+        return Answer(text=finish(refusal_message(outcome, n_entities), []),
+                      chunks=[], mode="refused", status=outcome.status, agent=agent)
+
+    chunks = outcome.chunks
+    dropped: tuple = ()
+
+    # 6a-ii — PERSONA SELECTION. A persona may narrow what it is willing to read.
+    #
+    # # WHY can this cause a refusal?
+    # Because a filter that silently returned nothing would hand the model an empty
+    # context, and a model given no context answers from memory — the exact failure
+    # the whole system exists to prevent. If a persona's policy empties the result
+    # set, that is an abstention and is reported as one.
+    if select is not None:
+        before = {c.field for c in chunks}
+        chunks = list(select(chunks))
+        dropped = tuple(sorted(before - {c.field for c in chunks}))
+        if not chunks:
+            stage("refused", "persona_field_policy")
+            n_entities = len(retriever.entity_vocab)
+            return Answer(
+                text=finish(refusal_message(outcome, n_entities), []), chunks=[],
+                mode="refused", status="persona_field_policy", agent=agent,
+                dropped_fields=dropped)
 
     # 6b — PACK + BUILD.
-    stage("building", f"{len(outcome.chunks)} sources")
-    context = pack_context(outcome.chunks)
-    prompt = build_prompt(query, context)
+    stage("building", f"{len(chunks)} sources")
+    context = pack_context(chunks)
+    prompt = build_prompt(query, context, system_prompt=system_prompt)
 
     # 6c — GENERATE via the provider cascade.
     if not use_llm:
-        text = extractive_answer(outcome.chunks)
-        return Answer(text=text, chunks=outcome.chunks, mode="extractive",
+        text = finish(extractive_answer(chunks), chunks)
+        return Answer(text=text, chunks=chunks, mode="extractive",
                       status=outcome.status, prompt=prompt, context=context,
-                      attempts=[("(llm disabled)", "skipped")],
-                      verification=verify_answer(text, outcome.chunks))
+                      attempts=[("(llm disabled)", "skipped")], agent=agent,
+                      dropped_fields=dropped,
+                      verification=verify_answer(text, chunks))
 
     stage("generating", prefer or "auto")
     response = llm_providers.generate(prompt, prefer=prefer, temperature=temperature)
     if response.ok:
         stage("verifying", f"{response.provider} · {response.model}")
-        text = ensure_disclaimer(extract_answer(response.text))
-        return Answer(text=text, chunks=outcome.chunks, mode="llm",
+        text = finish(ensure_disclaimer(extract_answer(response.text)), chunks)
+        return Answer(text=text, chunks=chunks, mode="llm",
                       status=outcome.status, provider=response.provider,
                       model=response.model, prompt=prompt, context=context,
-                      attempts=response.attempts,
+                      attempts=response.attempts, agent=agent,
+                      dropped_fields=dropped,
                       fell_back_from=response.fell_back_from,
-                      verification=verify_answer(text, outcome.chunks))
+                      verification=verify_answer(text, chunks))
 
     # Generation did not produce text. Split the two very different reasons apart
     # instead of quietly degrading both to the same "extractive" answer.
     configured = llm_providers.available_providers()
-    text = extractive_answer(outcome.chunks)
+    text = finish(extractive_answer(chunks), chunks)
 
     if configured:
         # A provider is configured and still failed → this is an incident, not a
@@ -372,16 +435,17 @@ def answer_question(query: str, retriever, k: int = 5, use_llm: bool = True,
         # mark it so the UI raises the provider's own error message.
         errors = "; ".join(f"{name}: {outcome_}" for name, outcome_ in response.attempts
                            if outcome_ not in ("not configured",))
-        return Answer(text=text, chunks=outcome.chunks, mode="llm_failed",
+        return Answer(text=text, chunks=chunks, mode="llm_failed",
                       status=outcome.status, prompt=prompt, context=context,
-                      attempts=response.attempts, llm_error=errors,
-                      verification=verify_answer(text, outcome.chunks))
+                      attempts=response.attempts, llm_error=errors, agent=agent,
+                      dropped_fields=dropped,
+                      verification=verify_answer(text, chunks))
 
     # No credentials anywhere → extractive is the designed, documented behaviour.
-    return Answer(text=text, chunks=outcome.chunks, mode="extractive",
+    return Answer(text=text, chunks=chunks, mode="extractive",
                   status=outcome.status, prompt=prompt, context=context,
-                  attempts=response.attempts,
-                  verification=verify_answer(text, outcome.chunks))
+                  attempts=response.attempts, agent=agent, dropped_fields=dropped,
+                  verification=verify_answer(text, chunks))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
