@@ -1,16 +1,20 @@
 """
-interactions.py — structured drug-drug interaction lookup (DDInter 2.0).
+interactions/ddinter.py — DDInter 2.0 implementation of the interaction adapter.
 
 An interaction is a fact about a *pair* of drugs, not a passage to retrieve — so
 this is a deterministic dictionary lookup, never RAG. That means: no missed pairs,
 no hallucinated ones, and a clean "no documented interaction" vs "drug unknown"
-distinction. RAG (rag_pipeline) is used only to *explain* an interaction we found.
+distinction. RAG is used only to *explain* an interaction this lookup found.
 
 Data: DDInter 2.0 (https://ddinter2.scbdd.com), CC BY-NC-SA 4.0 — 8 CSVs under
 data/ddinter/. Each row: DDInterID_A, Drug_A, DDInterID_B, Drug_B, Level.
 
+⚠️ **CC BY-NC-SA 4.0 is non-commercial.** See interactions/base.py for why this
+module sits behind an adapter and what has to happen before a commercial deploy.
+
+    from interactions import InteractionDB
     db = InteractionDB()
-    db.check_pair("warfarin", "naproxen")        # -> {'status':'ok','level':'Major',...}
+    db.check_pair("warfarin", "naproxen")     # -> {'status':'ok','level':'Major',...}
     db.check_list(["warfarin", "naproxen", "metformin"])
 """
 from __future__ import annotations
@@ -22,18 +26,22 @@ import re
 from pathlib import Path
 from typing import Optional
 
-HERE = Path(__file__).resolve().parent
-DDINTER_DIR = HERE / "data" / "ddinter"
+from .base import LEVEL_EMOJI, LEVEL_RANK, register
 
-# Severity ranking (higher = more dangerous). "Unknown" = documented interaction,
-# severity not classified by DDInter — still surfaced, ranked lowest.
-LEVEL_RANK = {"Major": 3, "Moderate": 2, "Minor": 1, "Unknown": 0}
-LEVEL_EMOJI = {"Major": "🔴", "Moderate": "🟠", "Minor": "🟡", "Unknown": "⚪"}
+# # WHY `.parent.parent` and not `.parent`?
+# This file used to live at the repo root, where `Path(__file__).parent` WAS the
+# root. Moving it into a package silently reparents every relative path: `.parent`
+# is now `interactions/`, so the corpus would be looked for at
+# `interactions/data/ddinter/` and the app would report "no DDInter CSVs" on a
+# perfectly good checkout. One extra `.parent` keeps the data where it lives.
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+DDINTER_DIR = ROOT / "data" / "ddinter"
 
 DDINTER_CITATION = ("DDInter 2.0 (Nucleic Acids Research 2025) — https://ddinter2.scbdd.com, "
                     "CC BY-NC-SA 4.0")
 
-# Salt / dosage-form / connector words carry no drug identity — mirrors rag_pipeline.
+# Salt / dosage-form / connector words carry no drug identity — mirrors stage 06.
 _SALT_WORDS = {
     "hydrochloride", "hcl", "sodium", "potassium", "calcium", "magnesium",
     "sulfate", "sulphate", "succinate", "fumarate", "tartrate", "maleate",
@@ -65,7 +73,15 @@ def identity_tokens(name: str) -> frozenset:
 
 
 class InteractionDB:
-    """In-memory DDInter lookup with tolerant drug-name resolution."""
+    """In-memory DDInter lookup with tolerant drug-name resolution.
+
+    Satisfies the `InteractionProvider` protocol structurally — it does not
+    inherit from it, which is exactly why the protocol was chosen (see base.py).
+    """
+
+    #: Adapter metadata (part of the InteractionProvider contract).
+    provider_id = "ddinter"
+    citation = DDINTER_CITATION
 
     def __init__(self, ddinter_dir: Optional[str] = None, rxnorm=None):
         self.dir = Path(ddinter_dir) if ddinter_dir else DDINTER_DIR
@@ -197,7 +213,11 @@ class InteractionDB:
                 "summary": summary, "n_drugs": len(clean_names)}
 
 
-# ── CLI smoke test:  python interactions.py warfarin naproxen metformin ──────
+# Make this source selectable by id — see interactions/base.py.
+register("ddinter", InteractionDB)
+
+
+# ── CLI smoke test:  python -m interactions.ddinter warfarin naproxen ────────
 if __name__ == "__main__":
     import sys
     try:

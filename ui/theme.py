@@ -1,18 +1,18 @@
 """
-ui.py — presentation layer for the Streamlit app.
+ui/theme.py — the single stylesheet, plus the badge primitives it defines.
 
-# WHY a separate module?
-# `streamlit_app.py` owns FLOW: which view is active, what the user asked, which
-# pipeline call runs. This file owns APPEARANCE: CSS, badges, cards, status
-# formatting. Keeping them apart means the chat logic stays readable instead of
-# being buried under markup, and a styling change can never alter behaviour.
-#
-# # WHY hand-written CSS rather than a component library?
+# WHY hand-written CSS rather than a component library?
 # Streamlit Cloud enforces a strict CSP and every extra component is another
 # dependency on a ~1 GB container. Everything here is a few hundred bytes of
-# inline CSS keyed off Streamlit's own theme variables, so it inherits the
-# palette from .streamlit/config.toml and adapts to light AND dark automatically
-# instead of hard-coding colours that break in one of them.
+# inline CSS keyed off Streamlit's own theme variables, so it inherits the palette
+# from .streamlit/config.toml and adapts to light AND dark automatically instead
+# of hard-coding colours that break in one of them.
+#
+# # WHY do pill()/stat_row() live beside the CSS instead of in components/?
+# They are not components, they are the *vocabulary* the CSS defines — each one is
+# a thin function over a class in the stylesheet below. Splitting them from the
+# rules they depend on is how a class gets renamed in one file and silently
+# stops applying in another.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ import streamlit as st
 # ─────────────────────────────────────────────────────────────────────────────
 # Theme CSS
 #
-# Every colour below is expressed with Streamlit's CSS custom properties
+# Every colour is expressed with Streamlit's CSS custom properties
 # (--primary-color, --background-color, …) which Streamlit injects from
 # config.toml. That is what makes one stylesheet correct in both themes.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -85,6 +85,17 @@ h2, h3 { font-weight: 650; letter-spacing: -0.01em; }
               font-variant-numeric: tabular-nums; }
 .srccard .b { font-size: .84rem; line-height: 1.5; opacity: .88; }
 
+/* ── Score bars (stacked BM25 / dense / rerank contribution) ─────────────── */
+.scorebar { display: flex; height: .34rem; border-radius: 999px; overflow: hidden;
+            margin: .4rem 0 .15rem; background:
+            color-mix(in srgb, var(--text-color) 8%, transparent); }
+.scorebar span { display: block; height: 100%; }
+.sb-lex  { background: #EA580C; }
+.sb-dense{ background: #2563EB; }
+.sb-rank { background: #059669; }
+.scorekey { display: flex; gap: .6rem; font-size: .68rem; opacity: .6;
+            font-variant-numeric: tabular-nums; }
+
 /* ── Answer block ───────────────────────────────────────────────────────── */
 .answer { font-size: .97rem; line-height: 1.65; }
 .answer p { margin-bottom: .6rem; }
@@ -107,7 +118,7 @@ def inject_css() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Badges
+# Badges — the vocabulary the CSS above defines
 # ─────────────────────────────────────────────────────────────────────────────
 def pill(label: str, tone: str = "", dot: bool = False) -> str:
     """Return a badge as an HTML string. tone: '', 'ok', 'warn', 'err'."""
@@ -126,65 +137,3 @@ def stat_row(key: str, value: str, tone: str = "") -> str:
     val = f'<span class="v">{value}</span>' if not tone else \
         f'<span class="v">{pill(value, tone, dot=True)}</span>'
     return f'<div class="statrow"><span class="k">{html.escape(key)}</span>{val}</div>'
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Source rendering
-#
-# # WHY render sources as cards instead of a bullet list?
-# The citation list is the evidence for the answer, so it has to be scannable:
-# the [Source N] marker must be findable at a glance to match it against the
-# marker in the answer text. A card with the number badged on the left does that;
-# a wall of bullets does not.
-# ─────────────────────────────────────────────────────────────────────────────
-def source_card(rank: int, chunk, snippet_chars: int = 320) -> str:
-    body = chunk.text
-    # Strip the "Name — field: " prefix stage 03 added; the header already shows it.
-    marker = f"{chunk.title} — {chunk.field}: "
-    if body.startswith(marker):
-        body = body[len(marker):]
-    if len(body) > snippet_chars:
-        body = body[:snippet_chars].rstrip() + "…"
-
-    origin = ""
-    if chunk.origin != "drug-corpus":
-        origin = f' <span class="f">· {html.escape(chunk.origin.replace("upload:", "📄 "))}</span>'
-
-    return (
-        f'<div class="srccard">'
-        f'<div class="hd">'
-        f'<span class="n">Source {rank}</span>'
-        f'<span class="t">{html.escape(chunk.title)}</span>'
-        f'<span class="f">{html.escape(chunk.field.replace("_", " "))}</span>{origin}'
-        f'<span class="s">score {chunk.score:.3f}</span>'
-        f'</div>'
-        f'<div class="b">{html.escape(body)}</div>'
-        f'</div>'
-    )
-
-
-def render_sources(chunks, expanded: bool = False) -> None:
-    """The citation list. Numbering matches [Source N] in the answer text."""
-    if not chunks:
-        return
-    label = f"📚 Sources used ({len(chunks)})"
-    with st.expander(label, expanded=expanded):
-        st.markdown("".join(source_card(i, c) for i, c in enumerate(chunks, 1)),
-                    unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Errors
-#
-# # WHY a dedicated helper instead of st.exception()?
-# st.exception renders a raw traceback. That is developer output leaking into a
-# clinical tool: it exposes file paths, is unreadable to the user, and buries the
-# one line that says what to actually do. Every failure path in the app routes
-# through here, so the user always gets a plain sentence plus a next action, and
-# the technical detail stays folded away.
-# ─────────────────────────────────────────────────────────────────────────────
-def error_box(title: str, detail: str = "", action: str = "", icon: str = "🚨") -> None:
-    st.error(f"**{title}**" + (f"\n\n{action}" if action else ""), icon=icon)
-    if detail:
-        with st.expander("Technical detail"):
-            st.code(detail.strip(), language=None)
