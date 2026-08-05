@@ -313,6 +313,8 @@ def answer_question(query: str, retriever, k: int = 5, use_llm: bool = True,
                     system_prompt: Optional[str] = None,
                     select: Optional[callable] = None,
                     postprocess: Optional[callable] = None,
+                    field_weights: Optional[dict] = None,
+                    field_boost: float = 0.0,
                     agent: str = "") -> Answer:
     """The complete RAG loop: retrieve → pack → prompt → generate → verify.
 
@@ -368,7 +370,11 @@ def answer_question(query: str, retriever, k: int = 5, use_llm: bool = True,
     #      LLM when there is no context, because a model given no context answers
     #      from memory — precisely the failure the whole system exists to prevent.
     stage("retrieving")
-    outcome = retriever.retrieve_context(query, k=k)
+    # `field_weights` is computed by retrieval/field_router.py and passed through.
+    # Stage 07 forwards it without interpreting it, for the same reason stage 06
+    # does not import the router: packages call into stages, never the reverse.
+    outcome = retriever.retrieve_context(query, k=k, field_weights=field_weights,
+                                         field_boost=field_boost)
     if not outcome.ok:
         stage("refused", outcome.status)
         n_entities = len(retriever.entity_vocab)

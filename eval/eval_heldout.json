@@ -1,0 +1,29 @@
+{
+  "_comment": "HELD-OUT intent/field cases. WHY this file exists: the intent classifier in retrieval/query_understanding.py was written while looking at eval_set.json, so scoring it on that set measures memorisation as much as generalisation - and it produced a suspicious field MRR of exactly 1.000. These are alternative natural phrasings of the same information needs, over drugs already verified present in the corpus. Weaker than truly independent authorship (the same person wrote the patterns and these paraphrases), but it is the difference between 'fits the data it was tuned on' and 'fits data it has not seen'. Treat a drop here as the honest number.",
+  "cases": [
+    {"q": "how much amoxicillin should be given", "drug": "amoxicillin", "field": "dosage"},
+    {"q": "how many mg of lamotrigine per day", "drug": "lamotrigine", "field": "dosage"},
+    {"q": "what quantity of ondansetron is normal", "drug": "ondansetron", "field": "dosage"},
+
+    {"q": "can gabapentin make you drowsy", "drug": "gabapentin", "field": "side_effects"},
+    {"q": "does prednisone cause weight gain", "drug": "prednisone", "field": "side_effects"},
+    {"q": "what problems can olanzapine cause", "drug": "olanzapine", "field": "side_effects"},
+    {"q": "is naproxen hard on the stomach", "drug": "naproxen", "field": "side_effects"},
+
+    {"q": "what condition does ropinirole help with", "drug": "ropinirole", "field": "indications"},
+    {"q": "what is naproxen given for", "drug": "naproxen", "field": "indications"},
+    {"q": "why would someone be on sertraline", "drug": "sertraline", "field": "indications"},
+
+    {"q": "how does famotidine reduce acid", "drug": "famotidine", "field": "mechanism"},
+    {"q": "how does atorvastatin function in the body", "drug": "atorvastatin", "field": "mechanism"},
+    {"q": "by what route does omeprazole act", "drug": "omeprazole", "field": "mechanism"},
+
+    {"q": "is warfarin safe with other medicines", "drug": "warfarin", "field": "interactions"},
+    {"q": "does sertraline clash with other drugs", "drug": "sertraline", "field": "interactions"},
+    {"q": "can lamotrigine be given alongside other treatment", "drug": "lamotrigine", "field": "interactions"},
+
+    {"q": "who should not take metformin", "drug": "metformin", "field": "contraindications"},
+    {"q": "when must trametinib be avoided", "drug": "trametinib", "field": "contraindications"},
+    {"q": "which patients cannot have warfarin", "drug": "warfarin", "field": "contraindications"}
+  ]
+}

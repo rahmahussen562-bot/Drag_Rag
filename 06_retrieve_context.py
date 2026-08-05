@@ -298,10 +298,26 @@ class Retriever:
 
     # ---- retrieval ---------------------------------------------------------
     def retrieve(self, query: str, k: int = 5,
-                 restrict_tokens: Optional[set] = None) -> list[RetrievedChunk]:
+                 restrict_tokens: Optional[set] = None,
+                 field_weights: Optional[dict] = None,
+                 field_boost: float = 0.0) -> list[RetrievedChunk]:
         """Rank chunks and return up to k that clear the relevance floor.
 
         May return FEWER than k, or none at all — that is how abstention works.
+
+        # FIELD ROUTING (field_weights + field_boost)
+        # `field_weights` is {label field: relative preference} — computed by
+        # retrieval/field_router.py from the query's intent distribution. This
+        # method applies it; it does not decide it.
+        #
+        # # WHY does the ARITHMETIC live here but the POLICY live in the package?
+        # Because stage 06 must stay the single source of truth for ranking, and
+        # importing the retrieval package from here would invert the dependency
+        # the whole layout rests on (packages call into stages, never the reverse).
+        # Passing weights in keeps this file self-contained and still runnable
+        # standalone with `python 06_retrieve_context.py`.
+        #
+        # Both default to no-op, so every existing caller ranks exactly as before.
         """
         if self.df.empty:
             return []
@@ -334,6 +350,28 @@ class Retriever:
                 mask = mask | self.upload_mask
             if mask.any():
                 candidates = np.where(mask)[0]
+
+        # 3c-ii — FIELD ROUTING. Applied AFTER the drug restriction and BEFORE the
+        # relevance floor.
+        #
+        # # WHY that exact position?
+        # After restriction, because boosting a field across the whole corpus would
+        # promote the right SECTION of the wrong DRUG — the failure the restriction
+        # exists to prevent. Before the floor, because the floor is evaluated on RAW
+        # component scores (see clears_floor below), so a boost can reorder what is
+        # returned but can never resurrect a chunk the floor rejected. Abstention is
+        # not negotiable, and this ordering is what guarantees the boost cannot
+        # weaken it.
+        if field_boost and field_weights:
+            top = max(field_weights.values()) if field_weights else 0.0
+            if top > 0:
+                mult = np.fromiter(
+                    (1.0 + field_boost * (field_weights.get(self.df.at[int(i), "field"], 0.0) / top)
+                     for i in candidates),
+                    dtype="float64", count=len(candidates))
+                boosted = combined.astype("float64", copy=True)
+                boosted[candidates] = boosted[candidates] * mult
+                combined = boosted
 
         order = candidates[np.argsort(combined[candidates])[::-1]]
 
@@ -372,7 +410,9 @@ class Retriever:
         )
 
     # ---- the full grounded flow -------------------------------------------
-    def retrieve_context(self, query: str, k: int = 5) -> RetrievalOutcome:
+    def retrieve_context(self, query: str, k: int = 5,
+                         field_weights: Optional[dict] = None,
+                         field_boost: float = 0.0) -> RetrievalOutcome:
         """Ground → restrict → retrieve → floor. The entry point stage 07 calls."""
         ground = self.ground(query)
         matched, unknown = ground["matched"], ground["unknown"]
@@ -384,7 +424,8 @@ class Retriever:
             return RetrievalOutcome(status, [], matched, unknown,
                                     self.suggest(unknown), query)
 
-        chunks = self.retrieve(query, k=k, restrict_tokens=matched or None)
+        chunks = self.retrieve(query, k=k, restrict_tokens=matched or None,
+                               field_weights=field_weights, field_boost=field_boost)
         if not chunks:
             return RetrievalOutcome("no_relevant_context", [], matched, unknown,
                                     [], query)

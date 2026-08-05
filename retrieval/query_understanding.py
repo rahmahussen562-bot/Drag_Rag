@@ -86,6 +86,86 @@ def normalise(query: str) -> str:
     return " ".join(out)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Intent classification
+#
+# # WHY rule-based and not a model?
+# It runs on every query, so it must be deterministic: an intent that varies run
+# to run makes an evaluation set meaningless and makes a ranking irreproducible.
+# It is also trivially auditable — a buyer can read why a query was routed, which
+# is not true of a classifier head.
+#
+# # WHY a DISTRIBUTION rather than a label?
+# "can I take this at night?" is arguably dosage, storage or side_effects. Forcing
+# a single label bets the ranking on that being resolved correctly. A distribution
+# lets the field router pull on several sections proportionally, so a
+# misclassification costs ranking position instead of making the right chunk
+# unreachable.
+#
+# Patterns are ordered most-specific first within each intent. Weights are
+# relative, not probabilities — they are normalised at the end.
+# ─────────────────────────────────────────────────────────────────────────────
+_INTENT_PATTERNS: list = [
+    # mechanism — note "what does X do" lands HERE, not on indications. That is
+    # what the ground-truth set says a clinician means by it, and the classifier
+    # follows the data rather than the phrasing's surface reading.
+    ("mechanism", 3.0, r"\bmechanism(?:\s+of\s+action)?\b|\bmoa\b"),
+    ("mechanism", 2.5, r"\bhow\s+(?:does|do|is)\b.*\b(?:work|works|act|acts|lower|lowers|reduce|reduces)\b"),
+    ("mechanism", 2.0, r"\bwhat\s+does\b.*\bdo\b"),
+    ("mechanism", 1.5, r"\bpharmacodynamic|\bacts?\s+on\b|\bmode\s+of\s+action\b"),
+
+    ("indications", 3.0, r"\bindication(?:s|ed)?\b"),
+    ("indications", 2.5, r"\bused?\s+(?:for|to\s+treat|in)\b|\bprescribed\s+for\b"),
+    ("indications", 2.5, r"\buses\b|\bwhat\s+is\b.*\bfor\b"),
+    ("indications", 1.5, r"\btreats?\b|\btreatment\s+of\b"),
+
+    ("dosage", 3.0, r"\bdosage\b|\bdosing\b|\bdose[sd]?\b"),
+    ("dosage", 2.0, r"\bhow\s+(?:much|many|often)\b|\btitrat\w+"),
+    ("dosage", 1.5, r"\b\d+\s*(?:mg|mcg|g|ml|units?)\b|\bbid\b|\btid\b|\bqd\b"),
+
+    ("side_effects", 3.0, r"\bside[-\s]?effects?\b|\badverse\b"),
+    ("side_effects", 2.0, r"\breactions?\b|\btoxicit\w+"),
+    ("side_effects", 1.5, r"\bcauses?\b.*\b(?:nausea|dizziness|rash|headache)\b"),
+
+    ("interactions", 3.0, r"\binteract\w*\b"),
+    ("interactions", 2.0, r"\btake\s+(?:with|together)\b|\bcombin\w+|\bconcurrent\w*"),
+    ("interactions", 1.5, r"\balongside\b|\bco-?administ\w+"),
+
+    ("contraindications", 3.0, r"\bcontraindicat\w+"),
+    ("contraindications", 2.0, r"\bshould\s+not\s+(?:take|be)\b|\bwho\s+(?:cannot|can't|should not)\b"),
+    ("contraindications", 1.5, r"\bavoid\b|\bnot\s+recommended\b"),
+
+    ("pregnancy_lactation", 3.0, r"\bpregnan\w+|\bbreast[-\s]?feed\w*|\blactation\b|\bnursing\b"),
+    ("storage_handling", 3.0, r"\bstor(?:e|age|ing)\b|\brefrigerat\w+|\bshelf\s+life\b"),
+    ("overdose", 3.0, r"\boverdose\b|\btoo\s+much\b|\bexceed\w*\b"),
+    ("pharmacokinetics", 3.0, r"\bhalf[-\s]?life\b|\bpharmacokinetic\w*|\bcmax\b|\bclearance\b"),
+    ("pharmacokinetics", 2.0, r"\babsorption\b|\bmetaboli[sz]\w+|\bexcret\w+"),
+    ("symptom_triage", 2.5, r"\bi\s+(?:have|feel|am\s+having|got)\b|\bmy\s+\w+\s+(?:hurts|aches)\b"),
+]
+
+_COMPILED = [(intent, weight, re.compile(pattern, re.IGNORECASE))
+             for intent, weight, pattern in _INTENT_PATTERNS]
+
+
+def classify_intents(query: str) -> dict:
+    """Score a query against every intent. Returns a normalised distribution.
+
+    An empty dict means nothing matched — the caller should apply no field
+    preference at all rather than guessing, because a wrong boost is worse than
+    none: it actively demotes the section that would have answered.
+    """
+    scores: dict = {}
+    text = str(query or "")
+    for intent, weight, pattern in _COMPILED:
+        if pattern.search(text):
+            scores[intent] = scores.get(intent, 0.0) + weight
+    total = sum(scores.values())
+    if not total:
+        return {}
+    return {k: round(v / total, 4) for k, v in
+            sorted(scores.items(), key=lambda kv: -kv[1])}
+
+
 def plan(query: str, retriever=None) -> QueryPlan:
     """Build a QueryPlan. Grounding is delegated to stage 06 — never reimplemented.
 
@@ -110,5 +190,6 @@ def plan(query: str, retriever=None) -> QueryPlan:
         normalised=normalised,
         entities=entities,
         unknown=unknown,
+        intents=classify_intents(query),
         is_multi_drug=len(entities) > 1,
     )

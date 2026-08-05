@@ -29,7 +29,9 @@ if str(ROOT) not in sys.path:
 
 from stages import load  # noqa: E402
 
-from agents.base import AgentConfig, fetch_k, register, select_chunks  # noqa: E402
+from agents.base import (AgentConfig, fetch_k, register, routing_for,  # noqa: E402
+                         select_chunks)
+from retrieval.field_router import FIELD_BOOST  # noqa: E402
 
 prompting = load("07_prompting")
 
@@ -113,6 +115,48 @@ def is_medication_change(query: str) -> bool:
     """True when the query asks whether to start/stop/change/combine a medicine."""
     return bool(_MEDICATION_CHANGE.search(str(query or "")))
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Interaction referral
+#
+# # WHY can't the patient agent just answer interaction questions from the label?
+# Because it is not allowed to read the `interactions` section — that text is
+# dense, conditional and written for prescribers. The failure this creates is not
+# a missing answer, it is a MISLEADING one, and it was caught by measurement:
+#
+#     "does warfarin interact with naproxen?"
+#       every warfarin chunk in the pool was an `interactions` chunk → all blocked
+#       → the agent answered fluently about NAPROXEN ALONE, cited it correctly,
+#         and never signalled that the interaction had not been addressed.
+#
+# A partial answer to a safety question reads as a complete one. So an interaction
+# question is referred rather than half-answered — and the app's DDInter checker
+# (deterministic, cannot miss a pair or invent one) still runs and renders above
+# this message. The user gets the reliable answer; they just do not get a
+# narrative summary of a section written for someone else.
+# ─────────────────────────────────────────────────────────────────────────────
+INTERACTION_MESSAGE = (
+    "Whether two medicines are safe together depends on the dose, your other "
+    "medicines and your medical history — so I won't summarise it from the label.\n\n"
+    "**Two things that will actually help:**\n\n"
+    "1. The **⚠️ Interaction checker** in the sidebar looks the pair up in a "
+    "curated interaction database. It is a direct lookup, so it cannot miss a "
+    "documented pair or invent one.\n"
+    "2. **Ask your pharmacist.** Checking combinations is routine for them and "
+    "they can see your full medication list.\n\n"
+    "I can still tell you what the label says about either medicine on its own — "
+    "what it is used for, its side effects, and its warnings."
+)
+
+
+def is_interaction_question(query: str) -> bool:
+    """True when the dominant intent of the query is a drug-drug interaction."""
+    from retrieval.query_understanding import classify_intents
+    intents = classify_intents(query)
+    if not intents:
+        return False
+    return max(intents, key=intents.get) == "interactions"
+
 # Imperative dosing verbs aimed at the reader. Matching these does not prove the
 # answer is unsafe — it proves it is PHRASED as an instruction, which for this
 # persona is the thing to catch regardless of intent.
@@ -145,7 +189,7 @@ CONFIG = AgentConfig(
     # so the intent survives someone widening allowed_fields later.
     blocked_fields=frozenset({"mechanism", "pharmacokinetics",
                               "clinical_pharmacology"}),
-    field_boost=0.0,
+    field_boost=FIELD_BOOST,          # 0.20, adopted from the held-out sweep
     mmr_lambda=0.6,
     expand_neighbours=False,
     lay_expansion=False,
@@ -205,6 +249,17 @@ class PatientAgent:
                 text=MEDICATION_CHANGE_MESSAGE, chunks=[], mode="refused",
                 status="medication_change", agent=self.config.id)
 
+        # Interaction questions go to the deterministic lookup, not to narrative
+        # this persona is not allowed to read. Answering them partially is worse
+        # than not answering them — see INTERACTION_MESSAGE for the measurement
+        # that established that.
+        if is_interaction_question(query):
+            if on_stage:
+                on_stage("refused", "interaction referral")
+            return prompting.Answer(
+                text=INTERACTION_MESSAGE, chunks=[], mode="refused",
+                status="interaction_referral", agent=self.config.id)
+
         # Over-retrieve, then let the field policy trim back to `want`. Asking for
         # exactly `want` and filtering afterwards starves the context (see
         # agents.base.OVERFETCH).
@@ -215,6 +270,8 @@ class PatientAgent:
             system_prompt=self.config.prompt(),
             select=lambda chunks: select_chunks(self.config, chunks, limit=want),
             postprocess=enforce,
+            field_weights=routing_for(self.config, query),
+            field_boost=self.config.field_boost,
             agent=self.config.id)
 
 

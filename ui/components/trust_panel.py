@@ -48,6 +48,8 @@ def answer_badges(result) -> str:
         return pills(*lead, pill("🚑 Emergency triage — RAG bypassed", "err"))
     if result.status == "medication_change":
         return pills(*lead, pill("🛑 Medication-change request — declined", "warn"))
+    if result.status == "interaction_referral":
+        return pills(*lead, pill("🔀 Referred to the interaction checker", "warn"))
     if result.status == "persona_field_policy":
         return pills(*lead, pill("🛑 Withheld — outside this persona's sections", "warn"))
     if result.refused:

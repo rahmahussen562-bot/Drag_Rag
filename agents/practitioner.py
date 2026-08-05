@@ -29,7 +29,9 @@ if str(ROOT) not in sys.path:
 
 from stages import load  # noqa: E402
 
-from agents.base import AgentConfig, fetch_k, register, select_chunks  # noqa: E402
+from agents.base import (AgentConfig, fetch_k, register, routing_for,  # noqa: E402
+                         select_chunks)
+from retrieval.field_router import FIELD_BOOST  # noqa: E402
 
 prompting = load("07_prompting")
 
@@ -45,7 +47,7 @@ CONFIG = AgentConfig(
     use_reranker=False,               # off by default on Cloud: a 2nd transformer
     allowed_fields=None,              # all fields
     blocked_fields=frozenset(),
-    field_boost=0.0,
+    field_boost=FIELD_BOOST,          # 0.20, adopted from the held-out sweep
     mmr_lambda=0.8,
     expand_neighbours=False,
     lay_expansion=False,              # practitioners type clinical terms already
@@ -99,6 +101,8 @@ class PractitionerAgent:
             system_prompt=self.config.prompt(),
             select=lambda chunks: select_chunks(self.config, chunks, limit=want),
             postprocess=enforce,
+            field_weights=routing_for(self.config, query),
+            field_boost=self.config.field_boost,
             agent=self.config.id)
 
 

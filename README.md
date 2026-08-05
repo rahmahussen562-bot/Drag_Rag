@@ -595,6 +595,84 @@ is maximised **first**, and field recall optimised only among settings that keep
 rules out pure-dense despite its better field recall: with no lexical weight, an exact drug-name
 match earns no score of its own.
 
+### Field routing — measured, then checked for self-deception
+
+Retrieval restricts by **drug**; field routing steers it toward the right **label
+section**. `retrieval/query_understanding.py` classifies query intent (rule-based,
+deterministic) and `retrieval/field_router.py` turns that into a soft multiplicative
+boost, applied *after* the drug restriction and *before* the relevance floor — so it
+can reorder results but can never resurrect a chunk the floor rejected.
+
+`eval/tune_field_boost.py` swept it:
+
+| FIELD_BOOST | Drug recall@5 | Field recall@5 | Field MRR |
+|---|---|---|---|
+| 0.00 | 100% | 91% | 0.822 |
+| **0.20** | **100%** | **100%** | **1.000** |
+
+**That result is not the one to quote.** A field MRR of exactly 1.000 is a red flag,
+not a triumph: the intent classifier was written *while reading* `eval_set.json`, so
+scoring it there measures memorisation as much as skill.
+
+`eval/run_heldout.py` re-runs it over 19 alternative phrasings of the same
+information needs — **the honest number**:
+
+| Configuration | Drug recall@5 | Field recall@5 | Field MRR |
+|---|---|---|---|
+| No routing | 100% | 84% | 0.684 |
+| **FIELD_BOOST = 0.20** | **100%** | **95%** | **0.789** |
+
+So routing generalises — **+11 points of field recall on unseen phrasings** — but is
+worth considerably less than the tuning set claimed. 0.20 was adopted on the strength
+of the held-out figure.
+
+**The real limitation, recorded rather than hidden:** intent accuracy on held-out
+phrasings is only **6/19 (32%)**. Thirteen match no pattern at all. Routing still helps
+because the classifier **fails safe** — no match produces an empty distribution, which
+produces a multiplier of exactly 1.0, so an unrecognised query ranks as though the
+module did not exist. Low coverage costs *opportunity*, never correctness. Widening the
+patterns is the highest-value next step, and it must be measured on `run_heldout.py`,
+not on the set it was tuned against.
+
+### Per-persona results (`eval/run_agent_eval.py`)
+
+`run_eval.py` drives the raw retrieval path; this drives `agent.answer(...)` — the same
+call the app makes. Both are kept: the first is the un-routed baseline, the second is
+the shipped configuration.
+
+| Persona | k | drug R@k | in-policy | field R@k\* | MRR\* | policy refusals | refusal acc |
+|---|---|---|---|---|---|---|---|
+| Patient | 4 | 100% | 12/19 | 100% | 0.729 | 3 | 100% |
+| Healthcare Professional | 8 | 100% | 22/22 | 100% | 1.000 | 0 | 100% |
+
+\* Field recall is computed over **in-policy** cases only — those whose expected section
+the persona is permitted to read. `eval_set.json` was written for a full-access reader
+(5 cases expect `mechanism`, 2 `dosage`, 3 `interactions` — all blocked for patients).
+Scoring the patient on sections its own safety policy forbids measures the policy, not
+the retrieval: the first run reported 32%, which reads as *"the safe persona is worse"*
+and means nothing of the kind.
+
+**The personas are not directly comparable on field recall** — they are scored over
+different subsets. Proper per-persona ground truth (brief §4.5) is the fix; this is the
+honest interim.
+
+### Two bugs the measurements found
+
+Both were in code that shipped with a green test suite:
+
+1. **Packing order was deciding selection.** The patient's safety-first ordering sorted
+   by `(field_priority, −score)` and *then* trimmed to k, so a relevant `indications`
+   chunk was dropped because `contraindications` chunks sorted ahead of it. Selection is
+   a relevance question; ordering is an attention question. Separating them took
+   in-policy field recall from **58% → 100%**.
+
+2. **Interaction questions were answered partially.** A patient asking *"does warfarin
+   interact with naproxen?"* had every warfarin chunk blocked (all were `interactions`),
+   and received a fluent, correctly-cited answer about **naproxen alone** — with nothing
+   signalling that the interaction was never addressed. A partial answer to a safety
+   question reads as a complete one. The patient persona now refers these to the
+   deterministic DDInter checker and to a pharmacist.
+
 **End-to-end (`run_e2e.py`, 26 checks) — all passing**, including:
 
 - row alignment: chunks ↔ embeddings ↔ BM25 all 14,955

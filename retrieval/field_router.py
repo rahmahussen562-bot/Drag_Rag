@@ -17,16 +17,45 @@ section — so the field is the remaining accuracy gap.
 # never resurrect a chunk the floor would have rejected, or the boost would quietly
 # weaken abstention — the one behaviour this project refuses to trade away.
 
-FIELD_BOOST is 0.0 in Phase 0, which makes this module a NO-OP by construction.
-Phase 1 sweeps it in eval/tune_field_boost.py exactly as tune_alpha.py sweeps
-alpha, and adopts a non-zero value only if field recall improves while drug recall
-stays at 100%. If the sweep says it hurts, it stays 0.0 and the negative result
-goes in the README.
+# ═══════════════════════════════════════════════════════════════════════════
+# MEASURED, AND THEN CHECKED FOR SELF-DECEPTION
+# ═══════════════════════════════════════════════════════════════════════════
+# `eval/tune_field_boost.py` swept FIELD_BOOST over the ground-truth set:
+#
+#     BOOST   drug R@5   field R@5   field MRR
+#      0.00      100%        91%       0.822
+#      0.20      100%       100%       1.000     ← "perfect"
+#
+# That result is NOT the one to quote, and the giveaway is the MRR of exactly
+# 1.000. The intent classifier in query_understanding.py was written while looking
+# at eval_set.json, so scoring it there measures memorisation as much as skill.
+#
+# `eval/run_heldout.py` re-runs it over 19 alternative phrasings of the same
+# information needs — the honest number:
+#
+#                    drug R@5   field R@5   field MRR
+#      no routing       100%        84%       0.684
+#      boost 0.20       100%        95%       0.789
+#
+# So routing DOES generalise (+11 points of field recall on unseen phrasings) but
+# it is worth far less than the tuning set claimed. 0.20 is adopted on the
+# strength of the held-out number, not the flattering one.
+#
+# # THE REAL LIMITATION, recorded rather than hidden:
+# intent accuracy on held-out phrasings is only 6/19 (32%) — 13 of them match no
+# pattern at all. Routing still helps because the classifier FAILS SAFE: no match
+# produces an empty distribution, which produces a multiplier of exactly 1.0, so an
+# unrecognised query is ranked as though this module did not exist. Low coverage
+# therefore costs opportunity, never correctness. Widening the patterns (or moving
+# to an embedding-based classifier) is the highest-value next step, and it should
+# be measured on run_heldout.py, not on the set it was tuned against.
 """
 from __future__ import annotations
 
-#: Phase 0: no-op. Phase 1 sets this from a measured sweep.
-FIELD_BOOST = 0.0
+#: Adopted from eval/run_heldout.py (+11 pts field recall on unseen phrasings at
+#: unchanged 100% drug recall), NOT from the tuning set's flattering 100%.
+#: Re-derive with: python eval/tune_field_boost.py && python eval/run_heldout.py
+FIELD_BOOST = 0.20
 
 #: intent -> [(label field, relative weight)], most relevant first.
 INTENT_TO_FIELDS = {

@@ -140,24 +140,60 @@ def select_chunks(config: AgentConfig, chunks: list, limit: Optional[int] = None
     Order of operations matters and is deliberate:
       1. blocked_fields   — a hard deny, applied first so nothing can re-admit it
       2. allowed_fields   — an allowlist, when the persona declares one
-      3. packing order    — safety-first for lay readers, score order otherwise
-      4. k                — trim last, so the trim sees the persona's ordering
+      3. SELECT by score  — which chunks get in is a RELEVANCE question
+      4. ORDER for packing— where they sit is an ATTENTION question
+
+    # WHY are steps 3 and 4 separate, when one sort could do both?
+    # Because they answer different questions, and merging them silently turns a
+    # presentation preference into a retrieval filter. The first version of this
+    # function sorted by (field_priority, -score) and THEN trimmed to k, so a
+    # lower-priority field was dropped from the context entirely even when it was
+    # the most relevant chunk retrieved — a patient asking "what is this for?"
+    # could lose the `indications` chunk because `contraindications` sorted ahead
+    # of it. Measured cost: 58% field recall over in-policy cases.
+    # Select on relevance, then order the survivors. Never the other way round.
     """
     out = [c for c in chunks if c.field not in config.blocked_fields]
     if config.allowed_fields is not None:
         out = [c for c in out if c.field in config.allowed_fields]
 
+    # 3 — SELECT: strictly by relevance. Retrieval already ranked these.
+    out = sorted(out, key=lambda c: -c.score)[:(limit or config.k)]
+
+    # 4 — ORDER: only among the chunks already selected.
     if config.reading_level == "plain":
-        # # WHY reorder for a lay reader?
+        # # WHY reorder for a lay reader at all?
         # Attention favours the EDGES of a long context ("lost in the middle"), so
-        # whichever source lands first is the one most likely to shape the answer.
-        # For a patient that must be the safety text, not the marketing-flavoured
-        # indications paragraph that usually scores highest.
+        # whichever source lands first is most likely to shape the answer. For a
+        # patient that should be the safety text rather than the indications
+        # paragraph. This changes emphasis WITHIN the context — it can no longer
+        # change what the context contains.
         priority = {"contraindications": 0, "side_effects": 1, "description": 2,
                     "indications": 3}
         out.sort(key=lambda c: (priority.get(c.field, 9), -c.score))
 
-    return out[:(limit or config.k)]
+    return out
+
+
+def routing_for(config: AgentConfig, query: str) -> dict:
+    """Field-routing weights for a query, honouring the persona's field policy.
+
+    # WHY intersect the routing with the persona's allowlist?
+    # Otherwise the router would boost a section the persona is then forbidden to
+    # read — promoting `mechanism` for a patient asking "how does it work?", only
+    # for select_chunks to delete every boosted chunk. The persona would end up
+    # with a WORSE context than if routing were off, because the boost displaced
+    # readable sections it was allowed to use.
+    """
+    from retrieval.field_router import field_weights
+    from retrieval.query_understanding import classify_intents
+
+    weights = field_weights(classify_intents(query))
+    if not weights:
+        return {}
+    if config.allowed_fields is not None:
+        weights = {f: w for f, w in weights.items() if f in config.allowed_fields}
+    return {f: w for f, w in weights.items() if f not in config.blocked_fields}
 
 
 def numbers_in(text: str) -> set:
