@@ -449,6 +449,67 @@ production.
 
 ---
 
+## Deployment
+
+A hospital will not deploy on Streamlit Community Cloud, so the container path is
+first-class:
+
+```bash
+docker compose up --build        # → http://localhost:8501
+make help                        # every command worth remembering
+```
+
+The image pins Python 3.11 (matching the Cloud target — a dev/prod Python skew is
+exactly what only shows up in production), bakes in the embedding model so a fresh
+container never downloads from the HF Hub at request time, runs as a non-root user,
+and **fails the build if `python -m healthcheck --deep` cannot answer**. A container
+that builds but cannot serve is worse than a build error, because it reaches
+production.
+
+### Configuration — `config.yaml`
+
+Everything a customer can retune without touching Python: branding, α, k, the
+relevance floors, `field_boost`, temperature, the interaction provider. Delete the
+file and every value falls back to the compiled-in default, which is the same value
+the eval harness measures — so a missing config can never change behaviour.
+
+**The disclaimer cannot be removed.** Blank it and `config.py` restores the
+mandatory text and raises a visible warning; a tool that informs clinical decisions
+ships with a disclaimer or it does not ship. Out-of-range values are clamped and
+unknown keys are reported rather than silently ignored — a typo'd key that does
+nothing is worse than one that errors, because the operator believes it worked.
+
+### Health check
+
+```bash
+python -m healthcheck            # fast: config, corpus, cache, providers (~17 s)
+python -m healthcheck --deep     # also builds the index and tests abstention
+python -m healthcheck --json     # for a monitor
+```
+
+Degraded modes report as **degraded, not down** — they are documented, intentional
+fallbacks that still answer, cite and refuse correctly. Reporting them as failures
+would train an operator to ignore the alert. `--strict` is there for deployments
+that genuinely require the full stack.
+
+### Graceful degradation is tested, not asserted
+
+```bash
+python eval/test_degraded.py     # 16 checks
+```
+
+| Missing | Behaviour | Verified |
+|---|---|---|
+| `sentence-transformers` / `torch` | BM25-only | grounds, cites, **still refuses** |
+| `faiss-cpu` | NumPy matmul | **ranking identical to FAISS** |
+| every LLM provider | extractive | 3/3 cited, no fabricated citations |
+
+Those paths are, by definition, the ones nobody exercises in development — every
+dev box has torch installed. A fallback that is never run is a fallback that has
+silently rotted.
+
+---
+
 ## Run locally
 
 ```bash

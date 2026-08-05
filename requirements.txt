@@ -10,6 +10,8 @@ scikit-learn>=1.3        # TF-IDF, cosine similarity, stopword fallback
 nltk>=3.8                # tokenizer + lemmatizer (stage 02, degrades gracefully)
 requests>=2.31           # LLM provider HTTP calls
 rank-bm25>=0.2.2         # BM25 (stage 05 has a NumPy fallback if absent)
+pyyaml>=6.0              # config.yaml. Optional: config.py falls back to the
+                         # compiled-in defaults, which ARE the shipped values.
 
 # ── Semantic retrieval (stage 04/05) ────────────────────────────────────────
 # Pulls in torch (~200 MB) transitively. Comment BOTH lines out for a

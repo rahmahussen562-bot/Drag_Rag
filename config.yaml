@@ -1,0 +1,62 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# PhARMA RAG — deployment configuration
+#
+# Everything a customer can change without touching Python. Delete this file and
+# the app still runs: every key below falls back to the same default that is
+# compiled into config.py, which is also the value the eval harness measures.
+#
+# WHAT IS DELIBERATELY *NOT* HERE:
+#   · chunk size / overlap — changing these invalidates the committed embedding
+#     cache, so they belong with the code that regenerates it (03_chunking.py).
+#   · the embedding model — same reason, plus it changes the vector dimension.
+# Those are not "tunables", they are a corpus rebuild.
+# ═══════════════════════════════════════════════════════════════════════════
+
+product:
+  name: "PhARMA RAG"
+  tagline: "Grounded drug Q&A with cited sources"
+  icon: "💊"
+  accent: "#0F9D8E"
+
+  # ⚠️ NON-REMOVABLE. Blank this and config.py restores the mandatory text and
+  # raises a visible warning in the UI — it will not silently ship without one.
+  # A product that informs clinical decisions without a disclaimer transfers
+  # liability to whoever deployed it. See README § Legal.
+  disclaimer: >-
+    Educational tool — not medical advice. Drug data can be incomplete or
+    outdated. Always confirm with a pharmacist or prescriber.
+
+retrieval:
+  # Hybrid weight on BM25; (1 - alpha) goes to dense. MEASURED, not guessed:
+  # reproduce with `python eval/tune_alpha.py`.
+  alpha: 0.20
+  top_k: 5
+  # A result must clear ONE of these to count as relevant. Below both → abstain.
+  emb_floor: 0.25
+  bm25_floor: 1.0
+  # Candidates fetched before the cross-encoder reranks them.
+  retrieve_pool: 40
+  # Intent → label-section boost. Adopted from eval/run_heldout.py (+11 pts field
+  # recall on UNSEEN phrasings), not from the tuning set's flattering 100%.
+  field_boost: 0.20
+  use_reranker: false   # loads a 2nd transformer; leave off under ~1 GB RAM
+
+generation:
+  temperature: 0.0            # factual assistant; keeps evaluation reproducible
+  max_context_chars: 12000
+  # Provider cascade order. An empty list uses llm_providers' own default.
+  providers: []
+
+agents:
+  default: "practitioner"
+
+interactions:
+  # Which interaction source to load. See interactions/base.py for the adapter.
+  # ⚠️ "ddinter" is CC BY-NC-SA 4.0 — NON-COMMERCIAL. Fine for evaluation and
+  # demos; a commercial deployment must license it or register another provider.
+  provider: "ddinter"
+  enabled: true
+
+audit:
+  enabled: true
+  redact: true          # strip identifiers ON WRITE, never at export time

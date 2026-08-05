@@ -1,0 +1,61 @@
+# docker-compose.yml — the one-command local/on-prem deployment.
+#
+#   cp .env.example .env      # add OPENROUTER_API_KEY (optional)
+#   docker compose up --build
+#   open http://localhost:8501
+#
+# # WHY does the app work with an EMPTY .env?
+# Because "no LLM configured" is a documented mode, not an error: the pipeline
+# falls back to extractive answers — retrieved label text, still cited, still
+# disclaimed. A buyer evaluating this offline should not need to obtain an API key
+# before they can see it work.
+
+services:
+  pharma-rag:
+    build: .
+    image: pharma-rag:latest
+    container_name: pharma-rag
+    ports:
+      - "8501:8501"
+
+    # Secrets come from the environment, never from the image. `env_file` is
+    # optional: compose tolerates it missing, and the app degrades as above.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Override any config.yaml value without rebuilding the image.
+      PHARMA_CONFIG: /app/config.yaml
+      TOKENIZERS_PARALLELISM: "false"
+
+    # Mount config.yaml read-only so an operator can retune and restart without a
+    # rebuild — the whole point of having a config file.
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+
+    restart: unless-stopped
+
+    # # WHY a memory limit at all?
+    # Because the documented budget is ~868 MB peak against a 1 GB target, and an
+    # OOM in production is how you discover someone enabled the cross-encoder
+    # reranker (a second transformer) without checking the headroom. Failing here
+    # is louder and earlier than failing on a user's request.
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8501/healthz', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      # Generous: a cold container loads the corpus and the embedding matrix
+      # before it serves. Measured cold boot is ~23 s with the committed cache.
+      start_period: 90s
+      retries: 3
+
+    security_opt:
+      - no-new-privileges:true
