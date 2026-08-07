@@ -228,12 +228,33 @@ def refusal_message(outcome, n_entities: int) -> str:
         names = ", ".join(f"“{t}”" for t in outcome.unknown)
         message = (f"I don't have information on {names} in my database "
                    f"({n_entities} sources), so I won't guess.")
-        if outcome.suggestions:
+
+        # A brand we RECOGNISE but deliberately refuse to ground deserves a real
+        # explanation. "Tylenol is acetaminophen, which I only hold inside opioid
+        # combination products" is actionable; "I don't know that word" is not —
+        # and it would be untrue, since we clearly do know it.
+        notes = getattr(outcome, "brand_notes", None) or {}
+        if notes:
+            lines = []
+            for brand, info in notes.items():
+                generic = info.get("generic", "")
+                if "combination" in info.get("reason", ""):
+                    lines.append(
+                        f"**{brand.title()}** is *{generic}*, which this corpus "
+                        f"holds only inside combination products. Answering from "
+                        f"one of those would describe a different medicine, so I "
+                        f"won't.")
+                else:
+                    lines.append(f"**{brand.title()}** is *{generic}*, which is "
+                                 f"not in this corpus.")
+            message += "\n\n" + "\n\n".join(lines)
+        elif outcome.suggestions:
             hint = "; ".join(f"“{t}” → did you mean **{s}**?" for t, s in outcome.suggestions)
             message += f"\n\nClosest match: {hint}"
         else:
-            message += ("\n\nTip: I index **generic** drug names (e.g. *acetaminophen*, "
-                        "not *Tylenol*). You can also upload your own documents.")
+            message += ("\n\nTip: many brand names are resolved automatically "
+                        "(*Glucophage* → metformin). You can also upload your own "
+                        "documents and query them the same way.")
     elif outcome.status == "no_relevant_context":
         found = ", ".join(sorted(outcome.matched)) or "that source"
         message = (f"I found **{found}** in my database, but nothing relevant enough "

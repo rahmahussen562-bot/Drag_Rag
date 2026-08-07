@@ -71,9 +71,10 @@ Run standalone:
 from __future__ import annotations
 
 import difflib
+import json
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dc_field
 from pathlib import Path
 from typing import Optional
 
@@ -102,6 +103,41 @@ RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 # (pricing, unrelated drugs) return nothing at all.
 EMB_FLOOR = 0.25       # minimum raw cosine similarity
 BM25_FLOOR = 1.0       # minimum raw BM25 score
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Brand → generic resolution (offline)
+#
+# # WHY offline, and why generated rather than hand-written?
+# A user types "Glucophage"; the corpus stores "Metformin Hydrochloride". Without
+# a map the query names nothing known and is refused — the single most visible
+# demo failure. `build_brand_map.py` derives the map FROM THE CORPUS so it cannot
+# go stale silently, and it is a plain JSON file so resolution works with no
+# network (rxnorm.py covers the long tail when one is available).
+#
+# # THE SAFETY RULE BAKED INTO THE FILE:
+# a brand only resolves when its generic exists as a STANDALONE record. In this
+# corpus `acetaminophen` appears ONLY inside opioid combinations
+# (Oxycodone And Acetaminophen, …), so "Tylenol" must NOT ground — answering it
+# from an opioid label would be fluent, correctly cited, and about a completely
+# different medicine. Those brands live in `refuse_only`: recognised well enough
+# to explain the refusal, never used to ground.
+# ─────────────────────────────────────────────────────────────────────────────
+BRAND_MAP_PATH = Path(__file__).resolve().parent / "data" / "brand_map.json"
+
+
+def load_brand_map(path: Path = BRAND_MAP_PATH) -> tuple[dict, dict]:
+    """Return (resolve, refuse_only). Missing/unreadable file → empty maps.
+
+    A missing brand map degrades to the previous behaviour (brands are refused),
+    which is the safe direction: no mapping is always better than a wrong one.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        resolve = {b: v["generic"] for b, v in (data.get("resolve") or {}).items()}
+        refuse = {b: v for b, v in (data.get("refuse_only") or {}).items()}
+        return resolve, refuse
+    except Exception:
+        return {}, {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -204,6 +240,12 @@ class RetrievalOutcome:
     unknown: list
     suggestions: list
     query: str
+    #: {brand typed: generic grounded} — shown as "I understood this as…".
+    #: A rewrite is NEVER silent: if we changed the query, the user sees it.
+    aliases: dict = dc_field(default_factory=dict)
+    #: {brand: reason} for names recognised but deliberately NOT grounded,
+    #: so the refusal can say *why* instead of "I don't know that word".
+    brand_notes: dict = dc_field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -241,6 +283,10 @@ class Retriever:
         self.has_uploads = bool((self.df["origin"] != "drug-corpus").any())
         self.upload_mask = (self.df["origin"] != "drug-corpus").to_numpy()
 
+        # 3c — Brand→generic map, loaded once. Empty if the file is absent, which
+        #      degrades to "brands are refused" — the safe direction.
+        self.brand_resolve, self.brand_refuse = load_brand_map()
+
         if use_reranker:
             self._load_reranker()
 
@@ -256,11 +302,36 @@ class Retriever:
 
     # ---- grounding ---------------------------------------------------------
     def ground(self, query: str) -> dict:
-        """Which corpus entities does this query name, and which are unknown?"""
+        """Which corpus entities does this query name, and which are unknown?
+
+        Brand names are resolved to their generic BEFORE the vocabulary check, so
+        "Glucophage" grounds to metformin. Every substitution is reported in
+        `aliases` — the UI shows it as "I understood this as…", because a rewrite
+        the user cannot see is a rewrite they cannot correct.
+        """
         terms = salient_query_terms(query)
-        matched = {t for t in terms if t in self.entity_vocab}
-        unknown = [t for t in terms if t not in self.entity_vocab]
-        return {"terms": terms, "matched": matched, "unknown": unknown}
+        matched, unknown, aliases, notes = set(), [], {}, {}
+
+        for term in terms:
+            if term in self.entity_vocab:
+                matched.add(term)
+                continue
+            # A brand whose generic is a standalone record → resolve it.
+            generic = self.brand_resolve.get(term)
+            if generic and generic in self.entity_vocab:
+                matched.add(generic)
+                aliases[term] = generic
+                continue
+            # A brand we recognise but must NOT ground (combination-only, or the
+            # generic simply is not covered). Stays unknown — but now the refusal
+            # can explain itself instead of shrugging.
+            note = self.brand_refuse.get(term)
+            if note:
+                notes[term] = note
+            unknown.append(term)
+
+        return {"terms": terms, "matched": matched, "unknown": unknown,
+                "aliases": aliases, "brand_notes": notes}
 
     def suggest(self, unknown: list) -> list:
         """Fuzzy "did you mean…?" for unknown terms. Improves a refusal from a
@@ -416,20 +487,29 @@ class Retriever:
         """Ground → restrict → retrieve → floor. The entry point stage 07 calls."""
         ground = self.ground(query)
         matched, unknown = ground["matched"], ground["unknown"]
+        aliases, notes = ground["aliases"], ground["brand_notes"]
 
         # An upload-bearing corpus skips drug grounding entirely — the user is
         # asking about their own document, not about our drug database.
         if not matched and not self.has_uploads:
             status = "unknown_entity" if unknown else "no_entity"
             return RetrievalOutcome(status, [], matched, unknown,
-                                    self.suggest(unknown), query)
+                                    self.suggest(unknown), query, aliases, notes)
 
-        chunks = self.retrieve(query, k=k, restrict_tokens=matched or None,
+        # A resolved brand must search for the GENERIC, not the brand the user
+        # typed — the corpus contains no chunk saying "Glucophage".
+        search_query = query
+        for brand, generic in aliases.items():
+            search_query = re.sub(rf"\b{re.escape(brand)}\b", generic,
+                                  search_query, flags=re.IGNORECASE)
+
+        chunks = self.retrieve(search_query, k=k, restrict_tokens=matched or None,
                                field_weights=field_weights, field_boost=field_boost)
         if not chunks:
             return RetrievalOutcome("no_relevant_context", [], matched, unknown,
-                                    [], query)
-        return RetrievalOutcome("ok", chunks, matched, unknown, [], query)
+                                    [], query, aliases, notes)
+        return RetrievalOutcome("ok", chunks, matched, unknown, [], query,
+                                aliases, notes)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

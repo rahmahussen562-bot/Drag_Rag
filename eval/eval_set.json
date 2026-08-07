@@ -22,16 +22,18 @@
     {"q": "ondansetron dosage", "drug": "ondansetron", "field": "dosage"},
     {"q": "what is ropinirole used for?", "drug": "ropinirole", "field": "indications"},
     {"q": "does warfarin interact with naproxen?", "drug": "warfarin", "field": "interactions"},
-    {"q": "trametinib contraindications", "drug": "trametinib", "field": "contraindications"}
+    {"q": "trametinib contraindications", "drug": "trametinib", "field": "contraindications"},
+
+    {"_moved_from": "refuse", "_why": "CORRECTED 2026-08. These two were listed as must-refuse with the justification 'not in corpus'. That justification was FALSE: data/drugs_large.json contains standalone records for Sildenafil / Sildenafil Citrate and for Alprazolam, each with all seven label fields. They were being refused because the system could not resolve a BRAND NAME, not because the drug was absent — i.e. they were false refusals, the exact failure mode brand resolution exists to fix. Verified by inspecting the corpus records directly, not by observing the tests pass.",
+     "q": "what does viagra do?", "drug": "sildenafil", "field": "mechanism"},
+    {"q": "xanax side effects", "drug": "alprazolam", "field": "side_effects"}
   ],
   "refuse": [
     {"q": "what are the side effects of aspirin?", "why": "aspirin not in corpus"},
     {"q": "how does ibuprofen work?", "why": "ibuprofen not in corpus"},
-    {"q": "is tylenol safe?", "why": "brand name, not in corpus"},
-    {"q": "paracetamol dosage", "why": "not in corpus"},
-    {"q": "what does viagra do?", "why": "not in corpus"},
-    {"q": "xanax side effects", "why": "not in corpus"},
-    {"q": "adderall interactions", "why": "not in corpus"},
+    {"q": "is tylenol safe?", "why": "brand resolves to acetaminophen, which this corpus holds ONLY inside opioid combination products (Oxycodone And Acetaminophen, etc.). Grounding it would answer about a different medicine, so it must still refuse — and now says why."},
+    {"q": "paracetamol dosage", "why": "same as tylenol — acetaminophen is combination-only in this corpus"},
+    {"q": "adderall interactions", "why": "amphetamine is combination-only in this corpus (Dextroamphetamine + 4-salt product)"},
     {"q": "loratadine side effects", "why": "not in corpus"},
     {"q": "what is the weather today?", "why": "no drug named"},
     {"q": "tell me a joke", "why": "no drug named"}
