@@ -27,12 +27,18 @@ demo:  ## Launch the app and print the 10-minute demo script
 eval:  ## Fast gate: retrieval recall, abstention, interactions
 	$(PY) eval/run_eval.py --embeddings
 
-eval-full:  ## Everything: e2e (26 checks), per-persona, held-out routing
+eval-full:  ## Everything: e2e, persona, brand, per-persona metrics, held-out routing
 	$(PY) eval/run_e2e.py --no-llm
+	@echo ""
+	$(PY) eval/run_persona_eval.py
+	@echo ""
+	$(PY) eval/run_brand_eval.py
 	@echo ""
 	$(PY) eval/run_agent_eval.py
 	@echo ""
 	$(PY) eval/run_heldout.py
+	@echo ""
+	$(PY) eval/test_degraded.py
 
 tune:  ## Re-derive the tuned constants (alpha, field_boost)
 	$(PY) eval/tune_alpha.py

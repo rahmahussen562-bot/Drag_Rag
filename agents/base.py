@@ -153,9 +153,25 @@ def select_chunks(config: AgentConfig, chunks: list, limit: Optional[int] = None
     # of it. Measured cost: 58% field recall over in-policy cases.
     # Select on relevance, then order the survivors. Never the other way round.
     """
-    out = [c for c in chunks if c.field not in config.blocked_fields]
-    if config.allowed_fields is not None:
-        out = [c for c in out if c.field in config.allowed_fields]
+    # # WHY are uploads exempt from the field policy?
+    # Because the allowlist encodes "which sections of an FDA LABEL may a lay
+    # reader see". An uploaded document's fields are its own headings — "page 3",
+    # "Internal Clinic Protocol ZX-9", "row 5" — which match no label section, so
+    # a naive allowlist silently deletes the user's ENTIRE document.
+    #
+    # Found by the counterfactual test once it was run per-persona: the patient
+    # agent could not read the injected Zorbaxin protocol at all, because its
+    # heading was not a label field. Stage 06 already exempts uploads from drug
+    # grounding for the same reason — someone asking about their own report is
+    # entitled to an answer from it — and the policy layer must agree.
+    def in_policy(c) -> bool:
+        if c.origin != "drug-corpus":
+            return True
+        if c.field in config.blocked_fields:
+            return False
+        return config.allowed_fields is None or c.field in config.allowed_fields
+
+    out = [c for c in chunks if in_policy(c)]
 
     # 3 — SELECT: strictly by relevance. Retrieval already ranked these.
     out = sorted(out, key=lambda c: -c.score)[:(limit or config.k)]

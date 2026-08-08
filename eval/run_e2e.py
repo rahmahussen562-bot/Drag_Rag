@@ -276,6 +276,61 @@ def main() -> int:
     record("no API-key literals in tracked source", not suspicious,
            f"scanned source files; hits: {suspicious or 'none'}")
 
+    # ── TEST 8 — THE TWO AGENTS ARE REAL ────────────────────────────────────
+    #
+    # # WHY do these belong in the REGRESSION gate rather than a side script?
+    # Because they are the product claim. "Two agents that genuinely differ" is
+    # what distinguishes this from one prompt with two tones, and a claim that is
+    # only checked when someone remembers to run a separate file is a claim that
+    # will silently stop being true. These three ran as an ad-hoc suite for a
+    # while, which is exactly how a guarantee rots.
+    print("\nTEST 8 — persona isolation: the two agents are genuinely different")
+    from agents import config_of, get_agent  # noqa: E402
+
+    patient, practitioner = get_agent("patient"), get_agent("practitioner")
+    pat_cfg = config_of("patient")
+
+    # 8a — PERSONA ISOLATION. Same query, same corpus, opposite outcomes.
+    #      This is the single test that proves the personas are not cosmetic.
+    titration = "should I increase my metformin dose to 1000 mg twice daily?"
+    pt = patient.answer(titration, retriever, use_llm=use_llm)
+    pc = practitioner.answer(titration, retriever, use_llm=use_llm)
+    record("patient REFUSES a dosage-titration question", pt.refused,
+           f"status={pt.status} sources={len(pt.chunks)}")
+    record("practitioner ANSWERS the same question",
+           not pc.refused and bool(pc.chunks),
+           f"status={pc.status} sources={len(pc.chunks)}")
+    record("⇒ same query + same corpus ⇒ different outcome",
+           pt.refused and not pc.refused,
+           "the personas differ in behaviour, not just in tone")
+
+    # 8b — FIELD-ALLOWLIST ENFORCEMENT, asserted on the PACKED CONTEXT STRING.
+    #      # WHY the string and not the intent? Because the guarantee is about
+    #      what the model can SEE. Checking a config flag proves we meant to block
+    #      the field; checking the packed context proves we did.
+    mech = patient.answer("how does metformin work?", retriever, use_llm=use_llm)
+    blocked_in_chunks = [c.field for c in mech.chunks
+                         if c.field in pat_cfg.blocked_fields]
+    blocked_in_text = [b for b in pat_cfg.blocked_fields
+                       if f"field={b}" in (mech.context or "")]
+    record("no blocked field reaches the patient's chunks", not blocked_in_chunks,
+           f"fields seen: {sorted({c.field for c in mech.chunks})}")
+    record("no blocked field appears in the packed context string",
+           not blocked_in_text,
+           f"blocked={sorted(pat_cfg.blocked_fields)}")
+
+    # 8c — COUNTERFACTUAL PER PERSONA. Both must reproduce the invented dose, so
+    #      grounding is proved for each persona rather than for the pipeline in
+    #      the abstract — a persona's field policy must not break retrieval of an
+    #      uploaded document.
+    for name, agent_obj in (("patient", patient), ("practitioner", practitioner)):
+        zp = agent_obj.answer("What is the dose of Zorbaxin?", merged_retriever,
+                              k=4, use_llm=use_llm)
+        from_upload = any(c.origin.startswith("upload:") for c in zp.chunks)
+        record(f"counterfactual survives the {name} agent",
+               from_upload and "250" in zp.text.lower(),
+               f"sources={[c.origin for c in zp.chunks]}")
+
     # ── Summary ─────────────────────────────────────────────────────────────
     print("\n" + "=" * 78)
     passed = sum(1 for s, _, _ in results if s == PASS)
