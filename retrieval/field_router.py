@@ -41,14 +41,34 @@ section — so the field is the remaining accuracy gap.
 # it is worth far less than the tuning set claimed. 0.20 is adopted on the
 # strength of the held-out number, not the flattering one.
 #
-# # THE REAL LIMITATION, recorded rather than hidden:
-# intent accuracy on held-out phrasings is only 6/19 (32%) — 13 of them match no
-# pattern at all. Routing still helps because the classifier FAILS SAFE: no match
-# produces an empty distribution, which produces a multiplier of exactly 1.0, so an
-# unrecognised query is ranked as though this module did not exist. Low coverage
-# therefore costs opportunity, never correctness. Widening the patterns (or moving
-# to an embedding-based classifier) is the highest-value next step, and it should
-# be measured on run_heldout.py, not on the set it was tuned against.
+# # COVERAGE — improved, and measured on data it was never tuned against.
+# The first version of the classifier recognised only 6/19 (32%) of held-out
+# phrasings. The patterns were then widened by linguistic FORM (causing-language,
+# prohibition aimed at a patient group, "by what process", …) rather than by
+# patching the specific misses.
+#
+# That widening compromised eval_heldout.json as a measurement: the patterns were
+# written knowing which of its cases failed. It now scores 19/19 (100%), which is
+# the memorisation signature, NOT a result — the same trap as the tuning set's
+# MRR 1.000. It is retained only as a regression check.
+#
+# eval_heldout2.json is a fresh set, written for linguistic variety rather than
+# against the pattern list. On it:
+#
+#     intent accuracy   16/20 = 80%   (was 32%)
+#     field recall      85% → 95%     (+10 points with routing on)
+#     field MRR         0.620 → 0.900
+#
+# Four cases still match nothing ("how frequently is ondansetron taken",
+# "is sertraline rough on sleep", "what is famotidine acting on", "when should
+# ropinirole not be used"). They are DELIBERATELY unfixed: one of them is a
+# one-character regex change, and patching them would turn set 2 into a tuning set
+# exactly like set 1, buying a number that could no longer be trusted. Closing that
+# gap honestly requires a third set.
+#
+# Coverage still costs only opportunity, never correctness: the classifier FAILS
+# SAFE — no match produces an empty distribution, which produces a multiplier of
+# exactly 1.0, so an unrecognised query ranks as though this module did not exist.
 """
 from __future__ import annotations
 

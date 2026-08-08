@@ -687,13 +687,34 @@ So routing generalises — **+11 points of field recall on unseen phrasings** �
 worth considerably less than the tuning set claimed. 0.20 was adopted on the strength
 of the held-out figure.
 
-**The real limitation, recorded rather than hidden:** intent accuracy on held-out
-phrasings is only **6/19 (32%)**. Thirteen match no pattern at all. Routing still helps
-because the classifier **fails safe** — no match produces an empty distribution, which
-produces a multiplier of exactly 1.0, so an unrecognised query ranks as though the
-module did not exist. Low coverage costs *opportunity*, never correctness. Widening the
-patterns is the highest-value next step, and it must be measured on `run_heldout.py`,
-not on the set it was tuned against.
+**Coverage, and why there are two held-out sets.** The first classifier recognised
+only **6/19 (32%)** of held-out phrasings. The patterns were then widened by
+*linguistic form* — causing-language, prohibition aimed at a patient group,
+"by what process" — rather than by patching the specific misses.
+
+That widening **compromised `eval_heldout.json` as a measurement**: the patterns were
+written knowing which of its cases failed. It now scores 19/19 (100%) — the
+memorisation signature again, not a result. It is kept only as a regression check.
+
+`eval_heldout2.json` is a fresh set, written for linguistic variety rather than
+against the pattern list. **On data the patterns were never tuned against:**
+
+| | Before | After |
+|---|---|---|
+| Intent accuracy | 32% | **80%** (16/20) |
+| Field recall@5 (routing on) | 84% → 95% | 85% → **95%** |
+| Field MRR | 0.684 → 0.789 | 0.620 → **0.900** |
+
+Four cases still match nothing — *"how frequently is ondansetron taken"*, *"is
+sertraline rough on sleep"*, *"what is famotidine acting on"*, *"when should
+ropinirole not be used"*. They are **deliberately unfixed**. One is a one-character
+regex change. Patching them would turn set 2 into a tuning set exactly like set 1,
+buying a number that could no longer be trusted; closing that gap honestly needs a
+third set.
+
+Coverage costs *opportunity*, never correctness: the classifier **fails safe** — no
+match produces an empty distribution, which produces a multiplier of exactly 1.0, so
+an unrecognised query ranks as though the module did not exist.
 
 ### Per-persona results (`eval/run_agent_eval.py`)
 

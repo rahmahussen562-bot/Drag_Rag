@@ -113,27 +113,56 @@ _INTENT_PATTERNS: list = [
     ("mechanism", 2.5, r"\bhow\s+(?:does|do|is)\b.*\b(?:work|works|act|acts|lower|lowers|reduce|reduces)\b"),
     ("mechanism", 2.0, r"\bwhat\s+does\b.*\bdo\b"),
     ("mechanism", 1.5, r"\bpharmacodynamic|\bacts?\s+on\b|\bmode\s+of\s+action\b"),
+    # Generalised: other ways of asking "by what means does this operate".
+    ("mechanism", 2.0, r"\bhow\s+(?:does|do)\b[^.?!]*"
+                       r"\b(?:function|functions|act|acts|affect|affects|"
+                       r"produce|produces|achieve|achieves)\b"),
+    ("mechanism", 2.0, r"\bby\s+what\s+(?:route|mechanism|means|process)\b"),
 
     ("indications", 3.0, r"\bindication(?:s|ed)?\b"),
     ("indications", 2.5, r"\bused?\s+(?:for|to\s+treat|in)\b|\bprescribed\s+for\b"),
     ("indications", 2.5, r"\buses\b|\bwhat\s+is\b.*\bfor\b"),
     ("indications", 1.5, r"\btreats?\b|\btreatment\s+of\b"),
+    # Generalised: "what condition", "why would someone be on it", "helps with".
+    ("indications", 2.5, r"\bwhat\s+(?:condition|conditions|illness|disease|"
+                          r"problem)\b"),
+    ("indications", 2.0, r"\bwhy\s+(?:would|do|does|is|are)\b[^.?!]*"
+                          r"\b(?:on|take|taking|given|prescribed|use|using)\b"),
+    ("indications", 2.0, r"\bhelps?\s+with\b|\bgiven\s+for\b|\btaken\s+for\b"),
 
     ("dosage", 3.0, r"\bdosage\b|\bdosing\b|\bdose[sd]?\b"),
     ("dosage", 2.0, r"\bhow\s+(?:much|many|often)\b|\btitrat\w+"),
+    # Generalised: quantity nouns other than "dose".
+    ("dosage", 2.0, r"\b(?:what|which|how)\s+(?:quantity|amount|strength)\b"),
+    ("dosage", 1.5, r"\bper\s+(?:day|dose|week)\b|\bdaily\s+(?:limit|maximum)\b"),
     ("dosage", 1.5, r"\b\d+\s*(?:mg|mcg|g|ml|units?)\b|\bbid\b|\btid\b|\bqd\b"),
 
     ("side_effects", 3.0, r"\bside[-\s]?effects?\b|\badverse\b"),
     ("side_effects", 2.0, r"\breactions?\b|\btoxicit\w+"),
-    ("side_effects", 1.5, r"\bcauses?\b.*\b(?:nausea|dizziness|rash|headache)\b"),
+    # Generalised: "causing" language and lay complaint words. Lower weight than
+    # the explicit forms above, so an unambiguous phrasing still wins the blend.
+    ("side_effects", 1.5, r"\bcauses?\b|\bcausing\b|\bcaused\s+by\b"),
+    ("side_effects", 1.5, r"\bmakes?\s+(?:you|me|people|patients|someone)\b"),
+    ("side_effects", 1.2, r"\bproblems?\b|\bharms?\b|\bdamage\b"),
+    ("side_effects", 1.2, r"\bhard\s+on\b|\bupsets?\b|\bbad\s+for\b"),
 
     ("interactions", 3.0, r"\binteract\w*\b"),
     ("interactions", 2.0, r"\btake\s+(?:with|together)\b|\bcombin\w+|\bconcurrent\w*"),
     ("interactions", 1.5, r"\balongside\b|\bco-?administ\w+"),
+    # Generalised: "safe with", "clash with", "with other medicines".
+    ("interactions", 2.0, r"\bsafe\s+(?:with|to\s+take\s+with)\b"),
+    ("interactions", 2.0, r"\bclash\w*\s+with\b|\bmix\w*\s+with\b"),
+    ("interactions", 2.0, r"\bwith\s+other\s+(?:drugs?|medicines?|medications?|treatments?)\b"),
 
     ("contraindications", 3.0, r"\bcontraindicat\w+"),
     ("contraindications", 2.0, r"\bshould\s+not\s+(?:take|be)\b|\bwho\s+(?:cannot|can't|should not)\b"),
     ("contraindications", 1.5, r"\bavoid\b|\bnot\s+recommended\b"),
+    # Generalised: prohibition aimed at a patient GROUP rather than a person.
+    ("contraindications", 2.0, r"\b(?:must|should)\b[^.?!]*\bavoid\w*\b"),
+    ("contraindications", 2.0, r"\bwhich\s+(?:patients?|people|groups?)\b[^.?!]*"
+                               r"\b(?:cannot|can't|must\s+not|should\s+not)\b"),
+    ("contraindications", 2.0, r"\bcannot\s+(?:have|take|be\s+given|use)\b"),
+    ("contraindications", 1.5, r"\bnot\s+suitable\b|\bunsafe\s+for\b"),
 
     ("pregnancy_lactation", 3.0, r"\bpregnan\w+|\bbreast[-\s]?feed\w*|\blactation\b|\bnursing\b"),
     ("storage_handling", 3.0, r"\bstor(?:e|age|ing)\b|\brefrigerat\w+|\bshelf\s+life\b"),

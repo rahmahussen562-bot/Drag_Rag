@@ -41,17 +41,22 @@ representation = load("04_vector_representation")
 vector_store = load("05_create_vector_store")
 retrieval = load("06_retrieve_context")
 
-HELD = json.loads((Path(__file__).parent / "eval_heldout.json").read_text(encoding="utf-8"))
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--boost", type=float, default=0.20)
+    ap.add_argument("--set", default="eval_heldout2.json",
+                    help="which held-out file to score")
     args = ap.parse_args()
 
-    cases = HELD["cases"]
-    print(f"Held-out evaluation — {len(cases)} cases the classifier was not tuned on.\n")
+    # # WHY default to the SECOND held-out file?
+    # Because eval_heldout.json stopped being held-out the moment the intent
+    # patterns were widened knowing which of its cases they missed. That is the
+    # same trap that produced a fake MRR of 1.000 on eval_set.json. It is kept as
+    # a regression check; improvements are reported on the fresh set.
+    path = Path(__file__).parent / args.set
+    cases = json.loads(path.read_text(encoding="utf-8"))["cases"]
+    print(f"Held-out evaluation — {len(cases)} cases from {path.name}\n")
 
     df = chunking.build_chunks(documents_stage.load_drug_documents())
     embedder = representation.Embedder()

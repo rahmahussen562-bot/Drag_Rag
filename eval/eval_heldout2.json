@@ -1,0 +1,30 @@
+{
+  "_comment": "SECOND held-out set. WHY a second one: eval_heldout.json was used to justify FIELD_BOOST=0.20, and the intent patterns were then widened knowing which of its 19 cases were missed. That makes it a tuning set now, not a held-out one — the same trap that produced the fake MRR 1.000 on eval_set.json. These are fresh phrasings, written for linguistic variety rather than against the pattern list, over drugs verified present in the corpus. Report improvements on THIS file; eval_heldout.json is now only a regression check.",
+  "cases": [
+    {"q": "roughly what strength of gabapentin is typical", "drug": "gabapentin", "field": "dosage"},
+    {"q": "is there a daily maximum for prednisone", "drug": "prednisone", "field": "dosage"},
+    {"q": "how frequently is ondansetron taken", "drug": "ondansetron", "field": "dosage"},
+
+    {"q": "will olanzapine make someone gain weight", "drug": "olanzapine", "field": "side_effects"},
+    {"q": "any harms from long term omeprazole", "drug": "omeprazole", "field": "side_effects"},
+    {"q": "is sertraline rough on sleep", "drug": "sertraline", "field": "side_effects"},
+    {"q": "unwanted reactions to amoxicillin", "drug": "amoxicillin", "field": "side_effects"},
+
+    {"q": "what illness is lamotrigine meant for", "drug": "lamotrigine", "field": "indications"},
+    {"q": "why do people end up on tamsulosin", "drug": "tamsulosin", "field": "indications"},
+    {"q": "what does varenicline help with", "drug": "varenicline", "field": "indications"},
+
+    {"q": "by what process does atorvastatin lower lipids", "drug": "atorvastatin", "field": "mechanism"},
+    {"q": "how does glimepiride achieve its effect", "drug": "glimepiride", "field": "mechanism"},
+    {"q": "what is famotidine acting on", "drug": "famotidine", "field": "mechanism"},
+
+    {"q": "can metformin be taken with other medications", "drug": "metformin", "field": "interactions"},
+    {"q": "anything that clashes with warfarin", "drug": "warfarin", "field": "interactions"},
+    {"q": "is naproxen safe with blood thinners", "drug": "naproxen", "field": "interactions"},
+
+    {"q": "which people must avoid trametinib", "drug": "trametinib", "field": "contraindications"},
+    {"q": "who cannot be given lisinopril", "drug": "lisinopril", "field": "contraindications"},
+    {"q": "is prednisone unsafe for anyone", "drug": "prednisone", "field": "contraindications"},
+    {"q": "when should ropinirole not be used", "drug": "ropinirole", "field": "contraindications"}
+  ]
+}
